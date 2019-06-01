@@ -1,14 +1,14 @@
 {
   "files": {
-    "main.js": "/static/js/main.013a08a2.chunk.js",
-    "main.js.map": "/static/js/main.013a08a2.chunk.js.map",
+    "main.js": "/static/js/main.8be06f78.chunk.js",
+    "main.js.map": "/static/js/main.8be06f78.chunk.js.map",
     "runtime~main.js": "/static/js/runtime~main.a8a9905a.js",
     "runtime~main.js.map": "/static/js/runtime~main.a8a9905a.js.map",
     "static/js/2.bb02c703.chunk.js": "/static/js/2.bb02c703.chunk.js",
     "static/js/2.bb02c703.chunk.js.map": "/static/js/2.bb02c703.chunk.js.map",
     "index.html": "/index.html",
-    "precache-manifest.a964e555e902d5a8f00f389ef50abcd2.js": "/precache-manifest.a964e555e902d5a8f00f389ef50abcd2.js",
+    "precache-manifest.9f50f86b3d516c410582da48e428ba46.js": "/precache-manifest.9f50f86b3d516c410582da48e428ba46.js",
     "service-worker.js": "/service-worker.js",
-    "static/media/book.jpg": "/static/media/book.6430eecc.jpg"
+    "static/media/book.jpg": "/static/media/book.54d27b71.jpg"
   }
 }
