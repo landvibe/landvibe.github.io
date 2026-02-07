@@ -1,7 +1,7 @@
-const CACHE_NAME = 'ocean-pinball-v2';
+const CACHE_NAME = 'ocean-pinball-v3';
 const ASSETS = [
   './',
-  './pinball_web.html',
+  './index.html',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
@@ -25,18 +25,16 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
-// Fetch: cache-first, fallback to network, navigation always returns main page
+// Fetch: navigation -> index.html, others -> cache first
 self.addEventListener('fetch', event => {
-  // For navigation requests (opening the app), always serve the main HTML
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      caches.match('./pinball_web.html')
-        .then(cached => cached || fetch('./pinball_web.html'))
-        .catch(() => caches.match('./pinball_web.html'))
+      caches.match('./index.html')
+        .then(cached => cached || fetch(event.request))
+        .catch(() => caches.match('./index.html'))
     );
     return;
   }
-  // For other requests: cache first, then network
   event.respondWith(
     caches.match(event.request)
       .then(cached => cached || fetch(event.request))
