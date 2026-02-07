@@ -1,7 +1,9 @@
 const CACHE_NAME = 'ocean-pinball-v1';
 const ASSETS = [
   './pinball_web.html',
-  './manifest.json'
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 // Install: cache all assets
