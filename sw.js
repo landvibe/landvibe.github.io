@@ -25,18 +25,42 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
-// Fetch: navigation -> index.html, others -> cache first
+// Fetch:
+// - navigation: network-first + cache update (so installed PWA actually refreshes after deploy)
+// - others: stale-while-revalidate for same-origin GET
 self.addEventListener('fetch', event => {
-  if (event.request.mode === 'navigate') {
-    event.respondWith(
-      caches.match('./index.html')
-        .then(cached => cached || fetch(event.request))
-        .catch(() => caches.match('./index.html'))
-    );
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+
+  // App shell (HTML): always try network first.
+  if (req.mode === 'navigate') {
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(req);
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put('./index.html', res.clone());
+        return res;
+      } catch (e) {
+        const cached = await caches.match('./index.html');
+        return cached || Response.error();
+      }
+    })());
     return;
   }
-  event.respondWith(
-    caches.match(event.request)
-      .then(cached => cached || fetch(event.request))
-  );
+
+  // Assets: serve cache immediately, update in background.
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(req);
+    const fetched = fetch(req)
+      .then(async res => {
+        if (res && res.ok) await cache.put(req, res.clone());
+        return res;
+      })
+      .catch(() => cached);
+    return cached || fetched;
+  })());
 });
