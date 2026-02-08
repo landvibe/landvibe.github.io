@@ -92,7 +92,7 @@ const TREASURE_C = BALATRO_GOLD;
 
 const ROUND_BASE_TARGET = 1500;
 const ROUND_SCALE = 1000;
-const GOLD_PER_SCORE = 300;
+const GOLD_PER_ROUND = 4; // fixed base gold reward per round
 const SHOP_BG = BALATRO_BG_BASE;
 const SHOP_PANEL = [50, 50, 70];
 const SHOP_HIGHLIGHT = [230, 230, 230];
@@ -127,6 +127,8 @@ const SHOP_ITEMS = [
     {id:'flipper_size', name:'큰 플리퍼', desc:'플리퍼 길이 +10', max_lv:5, icon:'📏'},
 ];
 const UPGRADE_DRAW_COST = 5;
+const CONSUMABLE_DRAW_COST = 4;
+const GACHA_COST = 5;
 
 const CONSUMABLES = [
     {id:'deep_sea', name:'심해 보너스', desc:'10초간 점수 3배', color:[60,180,255], icon:'🌊', weight:20},
@@ -135,12 +137,10 @@ const CONSUMABLES = [
     {id:'combo_master', name:'콤보 마스터', desc:'콤보 유지시간 2배', color:[255,160,60], icon:'🔥', weight:18},
     {id:'temp_life', name:'임시 생명', desc:'이번 라운드 생명 +1', color:[255,100,120], icon:'❤️', weight:12},
 ];
-const CONSUMABLE_DRAW_COST = 4;
 
 // ============================================================
 //  BALL TYPES (Gacha)
 // ============================================================
-const GACHA_COST = 5;
 const RARITY_COLORS = [[180,200,220],[100,180,255],[255,220,50]];
 const RARITY_GLOW = [[80,100,120],[60,120,200],[200,180,30]];
 
@@ -555,12 +555,13 @@ class Flipper {
         this.px=px; this.py=py; this.side=side; this.length=length;
         if (side==='left') { this.rest=0.45; this.act=-0.45; }
         else { this.rest=Math.PI-0.45; this.act=Math.PI+0.45; }
-        this.angle=this.rest; this.ang_v=0; this.on=false;
+        this.angle=this.rest; this.prev_angle=this.rest; this.ang_v=0; this.on=false;
     }
     tip() {
         return [this.px+this.length*Math.cos(this.angle), this.py+this.length*Math.sin(this.angle)];
     }
     update() {
+        this.prev_angle = this.angle;
         const tgt = this.on ? this.act : this.rest;
         const old = this.angle;
         const spd = this.on ? 0.18 : 0.10;
@@ -728,6 +729,244 @@ class Bumper {
                 drawLine(tx2, ty2, tx2+off, ty2+10, JELLY_K, 3);
                 fillCircle(tx2+off, ty2+10, 2, JELLY_K);
             }
+        }
+    }
+}
+
+// ============================================================
+//  BOSS (trash theme, appears every 3rd round)
+// ============================================================
+const BOSS_GOLD_REWARD = 3;
+class Boss {
+    constructor(x, y, ante) {
+        this.x = x; this.y = y;
+        this.r = 30 + ante * 3; // grows with ante
+        this.max_hp = 3 + ante * 2; // ante1=5, ante2=7, ante3=9...
+        this.hp = this.max_hp;
+        this.alive = true;
+        this.hit_t = 0;
+        this.wobble = 0;
+        this.death_t = 0; // death animation timer
+        this.ante = ante;
+        this.base_y = y;
+
+        // Movement (ante 2+)
+        this.moves = ante >= 2;
+        this.move_t = 0;
+        this.move_speed = 0.008 + ante * 0.003; // faster at higher ante
+        this.move_range_x = 60 + ante * 10; // wider at higher ante
+        this.move_range_y = 20 + ante * 5;
+
+        this.heal_flash = 0;
+
+        // Boss debuff abilities (ante 3+)
+        this.debuff = null; // current active debuff
+        this.debuff_timer = 0;
+        this.debuff_cooldown = 0;
+        this._pick_debuffs(ante);
+    }
+    _pick_debuffs(ante) {
+        // Ante 3+: boss has debuff abilities
+        this.debuff_pool = [];
+        if (ante >= 3) this.debuff_pool.push('gravity_up');   // increase gravity
+        if (ante >= 4) this.debuff_pool.push('flip_reverse'); // reverse flippers
+        if (ante >= 5) this.debuff_pool.push('heal');           // boss heals 1 HP
+        if (ante >= 6) this.debuff_pool.push('flip_lock_left', 'flip_lock_right'); // lock one flipper
+    }
+    update() {
+        if (this.hit_t > 0) this.hit_t--;
+        if (this.heal_flash > 0) this.heal_flash--;
+        this.wobble += 0.04;
+        if (!this.alive && this.death_t > 0) this.death_t--;
+
+        // Movement
+        if (this.alive && this.moves) {
+            this.move_t += this.move_speed;
+            this.x = WIDTH / 2 + Math.sin(this.move_t) * this.move_range_x;
+            this.y = this.base_y + Math.sin(this.move_t * 0.7) * this.move_range_y;
+        }
+
+        // Debuff logic
+        if (this.alive && this.debuff_pool.length > 0) {
+            if (this.debuff_timer > 0) {
+                this.debuff_timer--;
+                if (this.debuff_timer <= 0) this.debuff = null;
+            } else if (this.debuff_cooldown > 0) {
+                this.debuff_cooldown--;
+            } else {
+                // Activate random debuff
+                this.debuff = this.debuff_pool[Math.floor(Math.random() * this.debuff_pool.length)];
+                if (this.debuff === 'heal') {
+                    // Instant heal, no duration
+                    if (this.hp < this.max_hp) {
+                        this.hp++;
+                        this.heal_flash = 30; // signal for visual effect
+                    }
+                    this.debuff = null;
+                    this.debuff_cooldown = 300;
+                } else {
+                    this.debuff_timer = 180; // ~3 seconds
+                    this.debuff_cooldown = 300; // ~5 seconds between debuffs
+                }
+            }
+        }
+        if (!this.alive) this.debuff = null;
+    }
+    collide_ball(ball) {
+        if (!this.alive) return false;
+        const {hit, n, pen} = circ_circ(ball.x, ball.y, BALL_R, this.x, this.y, this.r);
+        if (hit) {
+            ball.x += n[0]*pen; ball.y += n[1]*pen;
+            const spd = Math.max(4, Math.hypot(ball.vx, ball.vy));
+            ball.vx = n[0]*spd*0.9; ball.vy = n[1]*spd*0.9;
+            this.hp--;
+            this.hit_t = 12;
+            if (this.hp <= 0) {
+                this.alive = false;
+                this.death_t = 60;
+            }
+            return true;
+        }
+        return false;
+    }
+    draw(t) {
+        if (!this.alive) {
+            // Death explosion animation
+            if (this.death_t > 0) {
+                const prog = this.death_t / 60;
+                const er = this.r * (2 - prog);
+                ctx.globalAlpha = prog * 0.6;
+                fillCircle(this.x, this.y, er, [120, 100, 80]);
+                // Debris
+                for (let i = 0; i < 8; i++) {
+                    const a = i * Math.PI * 2 / 8 + t * 0.05;
+                    const dr = er * (1.2 + (1 - prog) * 0.8);
+                    const dx = this.x + Math.cos(a) * dr;
+                    const dy = this.y + Math.sin(a) * dr;
+                    fillCircle(dx, dy, 3 + prog * 4, [90, 80, 60]);
+                }
+                ctx.globalAlpha = 1;
+            }
+            return;
+        }
+        const hr = this.r + (this.hit_t > 0 ? 4 : 0);
+        const wx = Math.sin(this.wobble) * 2;
+        const wy = Math.cos(this.wobble * 0.7) * 1.5;
+
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath(); ctx.ellipse(this.x, this.y + hr * 0.7, hr * 0.9, hr * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+
+        // Trash bag body (dark greenish brown)
+        const bodyCol = this.hit_t > 6 ? [220, 200, 180] : [70, 80, 50];
+        ctx.fillStyle = rgb(bodyCol);
+        ctx.beginPath();
+        ctx.ellipse(this.x + wx, this.y + wy, hr * 0.9, hr, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bag texture lines
+        ctx.strokeStyle = this.hit_t > 6 ? 'rgba(180,160,140,0.6)' : 'rgba(40,50,30,0.6)';
+        ctx.lineWidth = 1.5;
+        for (let i = -2; i <= 2; i++) {
+            const lx = this.x + wx + i * hr * 0.3;
+            drawLine(lx, this.y + wy - hr * 0.6, lx + i * 2, this.y + wy + hr * 0.6,
+                this.hit_t > 6 ? [180,160,140] : [50,60,35], 1);
+        }
+
+        // Bag tie at top
+        ctx.fillStyle = this.hit_t > 6 ? rgb([200,180,160]) : rgb([90, 100, 60]);
+        ctx.beginPath();
+        ctx.ellipse(this.x + wx, this.y + wy - hr * 0.85, hr * 0.35, hr * 0.15, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Trash sticking out
+        const stickCol = [180, 150, 100];
+        // Banana peel
+        ctx.fillStyle = rgb([220, 200, 60]);
+        ctx.beginPath();
+        ctx.moveTo(this.x + wx - hr * 0.3, this.y + wy - hr * 0.7);
+        ctx.quadraticCurveTo(this.x + wx - hr * 0.5, this.y + wy - hr * 1.1,
+            this.x + wx - hr * 0.15, this.y + wy - hr * 1.0);
+        ctx.lineWidth = 2; ctx.stroke(); ctx.fill();
+
+        // Can sticking out
+        fillCircle(this.x + wx + hr * 0.25, this.y + wy - hr * 0.75, 5, [150, 160, 170]);
+        strokeCircle(this.x + wx + hr * 0.25, this.y + wy - hr * 0.75, 5, [100, 110, 120], 1);
+
+        // Fish bone
+        const fbx = this.x + wx + hr * 0.1, fby = this.y + wy - hr * 0.5;
+        drawLine(fbx - 6, fby, fbx + 6, fby, [200, 200, 190], 1.5);
+        for (let i = -2; i <= 2; i++) {
+            const fx = fbx + i * 3;
+            drawLine(fx, fby - 3, fx, fby + 3, [200, 200, 190], 1);
+        }
+
+        // Angry eyes
+        const ex_off = hr * 0.25;
+        const ey = this.y + wy - hr * 0.15;
+        // Eye whites
+        fillCircle(this.x + wx - ex_off, ey, 6, [200, 200, 180]);
+        fillCircle(this.x + wx + ex_off, ey, 6, [200, 200, 180]);
+        // Pupils
+        fillCircle(this.x + wx - ex_off, ey + 1, 3, [40, 30, 20]);
+        fillCircle(this.x + wx + ex_off, ey + 1, 3, [40, 30, 20]);
+        // Angry eyebrows
+        drawLine(this.x + wx - ex_off - 5, ey - 7, this.x + wx - ex_off + 4, ey - 4, [60, 50, 30], 2);
+        drawLine(this.x + wx + ex_off + 5, ey - 7, this.x + wx + ex_off - 4, ey - 4, [60, 50, 30], 2);
+
+        // Hit flash ring
+        if (this.hit_t > 8) {
+            strokeCircle(this.x + wx, this.y + wy, hr + 8, [255, 200, 100], 3);
+        }
+
+        // HP bar above boss
+        const barW = hr * 2, barH = 6;
+        const barX = this.x - barW / 2, barY = this.y - hr - 18;
+        fillRect(barX, barY, barW, barH, [30, 30, 30]);
+        const hpRatio = this.hp / this.max_hp;
+        const hpCol = hpRatio > 0.5 ? [80, 200, 80] : (hpRatio > 0.25 ? [220, 180, 40] : [220, 60, 40]);
+        fillRect(barX, barY, Math.round(barW * hpRatio), barH, hpCol);
+        ctx.strokeStyle = rgb([80, 80, 80]); ctx.lineWidth = 1;
+        ctx.strokeRect(barX, barY, barW, barH);
+        fillText(`${this.hp}/${this.max_hp}`, this.x, barY - 3, WHITE, '10px "Malgun Gothic", sans-serif', 'center');
+
+        // Heal flash effect
+        if (this.heal_flash > 0) {
+            const hp = this.heal_flash / 30;
+            // Green glow ring expanding outward
+            const ringR = hr + (1 - hp) * 40;
+            ctx.globalAlpha = hp * 0.7;
+            strokeCircle(this.x + wx, this.y + wy, ringR, [80, 255, 120], 3);
+            ctx.globalAlpha = hp * 0.3;
+            fillCircle(this.x + wx, this.y + wy, hr + 5, [80, 255, 120]);
+            ctx.globalAlpha = 1;
+            // Rising + particles
+            if (this.heal_flash % 4 === 0) {
+                const px = this.x + wx + (Math.random() - 0.5) * hr * 1.5;
+                const py = this.y + wy + (Math.random() - 0.5) * hr;
+                fillText('💚', px, py - (30 - this.heal_flash), WHITE, '14px sans-serif', 'center');
+            }
+            // "+1 HP" text
+            const txtAlpha = Math.min(1, hp * 2);
+            ctx.globalAlpha = txtAlpha;
+            fillText('+1 HP', this.x, this.y - hr - 30 - (1 - hp) * 15, [80, 255, 120], 'bold 14px "Malgun Gothic", sans-serif', 'center');
+            ctx.globalAlpha = 1;
+        }
+
+        // Debuff casting aura
+        if (this.debuff) {
+            const auraR = hr + 15 + Math.sin(t * 0.15) * 5;
+            ctx.globalAlpha = 0.2 + Math.sin(t * 0.1) * 0.1;
+            const auraCols = {
+                'flip_lock_left': [200, 50, 50],
+                'flip_lock_right': [200, 50, 50],
+                'flip_reverse': [200, 150, 50],
+                'heal': [50, 200, 50],
+                'gravity_up': [50, 50, 200]
+            };
+            const ac = auraCols[this.debuff] || [150,150,150];
+            fillCircle(this.x + wx, this.y + wy, auraR, ac);
+            ctx.globalAlpha = 1;
         }
     }
 }
@@ -969,6 +1208,7 @@ class PinballGame {
         // Roguelike
         this.round_num = 0; this.round_score = 0; this.round_target = 0;
         this.gold = 0; this.gold_earned = 0; this.round_clear_timer = 0;
+        this.boss = null; this.boss_killed_gold = 0;
         this.shop_cursor = 0;
         this.shop_tab = 0; // 0=강화 뽑기, 1=소모품 뽑기, 2=공 뽑기
         this.upgrades = {};
@@ -1074,7 +1314,7 @@ class PinballGame {
             } else if (code === 'Escape') {
                 this.state = 'menu';
             }
-        } else if (this.state === 'gameover') {
+        } else if (this.state === 'gameover' || this.state === 'victory') {
             if (code === 'Space') this.state = 'menu';
         } else if (this.state === 'round_clear') {
             if (code === 'Space') this.round_clear_timer = 0;
@@ -1084,8 +1324,7 @@ class PinballGame {
                 if (code === 'ArrowLeft') this.upgrade_pick = 0;
                 else if (code === 'ArrowRight') this.upgrade_pick = 1;
                 else if (code === 'Space' || code === 'Enter') this._upgrade_pick_confirm();
-                else if (code === 'Escape') this.upgrade_choices = null;
-                return;
+                return; // must pick one, no cancel
             }
             const tabCounts = [1, 1, 1]; // items per tab (draw buttons)
             const total = tabCounts[this.shop_tab];
@@ -1122,8 +1361,8 @@ class PinballGame {
                 }
                 return;
             }
-            if (code === 'KeyZ' || code === 'ShiftLeft') { this.lf.on = true; sndFlip(); }
-            if (code === 'Slash' || code === 'ShiftRight') { this.rf.on = true; sndFlip(); }
+            if (code === 'KeyZ' || code === 'ShiftLeft') { this._flipper_on('left'); }
+            if (code === 'Slash' || code === 'ShiftRight') { this._flipper_on('right'); }
             if (code === 'Space' && this.ball_in_p) this.plunger.charging = true;
             if (code === 'ArrowLeft' && !this.tilt_lock) { this.tilt_x = -0.15; this.tilt_cnt++; }
             if (code === 'ArrowRight' && !this.tilt_lock) { this.tilt_x = 0.15; this.tilt_cnt++; }
@@ -1134,8 +1373,8 @@ class PinballGame {
     _onKeyUp(code) {
         if (code === 'Enter') { this._nextRoundHolding = false; this._nextRoundHold = 0; }
         if (this.state === 'play') {
-            if (code === 'KeyZ' || code === 'ShiftLeft') this.lf.on = false;
-            if (code === 'Slash' || code === 'ShiftRight') this.rf.on = false;
+            if (code === 'KeyZ' || code === 'ShiftLeft') this._flipper_off('left');
+            if (code === 'Slash' || code === 'ShiftRight') this._flipper_off('right');
             if (code === 'Space') {
                 if (this.ball_in_p && this.plunger.charging) {
                     for (const b of this.balls) {
@@ -1155,14 +1394,139 @@ class PinballGame {
 
     _reset_drops() {
         this.drops = [];
-        for (let i=0;i<5;i++) {
-            this.drops.push(new DropTarget(130+i*60, 430-Math.abs(i-2)*15, FISH_COL[i], 200));
+        const layout = this._current_map_drops || null;
+        if (layout) {
+            for (const d of layout) this.drops.push(new DropTarget(d[0], d[1], d[2], d[3]));
+        } else {
+            for (let i=0;i<5;i++)
+                this.drops.push(new DropTarget(130+i*60, 430-Math.abs(i-2)*15, FISH_COL[i], 200));
         }
+    }
+
+    _setup_map(ante) {
+        // Different map layouts per ante
+        const maps = [
+            // Ante 1: 기본 배치
+            {
+                bumpers: [
+                    [180, 250, 22, 'puffer', 100],
+                    [300, 220, 22, 'jelly', 150],
+                    [240, 330, 22, 'puffer', 100],
+                ],
+                drops: [[130,430,FISH_COL[0],200],[190,415,FISH_COL[1],200],[250,400,FISH_COL[2],200],[310,415,FISH_COL[3],200],[370,430,FISH_COL[4],200]],
+                spinner: [250, 470],
+                pin: [250, 755, 5, 50],
+            },
+            // Ante 2: 범퍼 넓게, 드롭 높이
+            {
+                bumpers: [
+                    [130, 230, 22, 'jelly', 150],
+                    [350, 230, 22, 'jelly', 150],
+                    [240, 310, 25, 'puffer', 120],
+                ],
+                drops: [[100,380,FISH_COL[1],200],[180,360,FISH_COL[3],200],[260,350,FISH_COL[0],200],[340,360,FISH_COL[4],200],[420,380,FISH_COL[2],200]],
+                spinner: [200, 480],
+                pin: [250, 755, 5, 50],
+            },
+            // Ante 3: 사각형 배치
+            {
+                bumpers: [
+                    [160, 220, 20, 'puffer', 100],
+                    [320, 220, 20, 'puffer', 100],
+                    [240, 280, 25, 'jelly', 180],
+                    [160, 340, 20, 'jelly', 150],
+                ],
+                drops: [[140,440,FISH_COL[2],220],[220,420,FISH_COL[0],220],[300,420,FISH_COL[4],220],[380,440,FISH_COL[1],220]],
+                spinner: [300, 490],
+                pin: [250, 755, 5, 50],
+            },
+            // Ante 4: 삼각형 + 중앙 대형
+            {
+                bumpers: [
+                    [240, 200, 28, 'jelly', 200],
+                    [150, 320, 22, 'puffer', 120],
+                    [330, 320, 22, 'puffer', 120],
+                ],
+                drops: [[110,420,FISH_COL[3],250],[190,400,FISH_COL[1],250],[270,390,FISH_COL[0],250],[350,400,FISH_COL[4],250],[430,420,FISH_COL[2],250]],
+                spinner: [340, 470],
+                pin: [250, 755, 5, 50],
+            },
+            // Ante 5: 다이아몬드
+            {
+                bumpers: [
+                    [240, 190, 22, 'puffer', 130],
+                    [160, 280, 22, 'jelly', 170],
+                    [320, 280, 22, 'jelly', 170],
+                    [240, 360, 22, 'puffer', 130],
+                ],
+                drops: [[130,450,FISH_COL[0],250],[210,430,FISH_COL[2],250],[290,430,FISH_COL[4],250],[370,450,FISH_COL[1],250]],
+                spinner: [180, 490],
+                pin: [250, 755, 5, 50],
+            },
+            // Ante 6: 밀집 배치
+            {
+                bumpers: [
+                    [180, 230, 20, 'jelly', 160],
+                    [300, 230, 20, 'jelly', 160],
+                    [240, 300, 22, 'puffer', 140],
+                    [180, 370, 20, 'puffer', 140],
+                    [300, 370, 20, 'jelly', 180],
+                ],
+                drops: [[120,440,FISH_COL[4],280],[200,425,FISH_COL[2],280],[280,420,FISH_COL[0],280],[360,425,FISH_COL[3],280]],
+                spinner: [250, 480],
+                pin: [250, 755, 5, 50],
+            },
+            // Ante 7: 지그재그
+            {
+                bumpers: [
+                    [140, 220, 22, 'puffer', 150],
+                    [280, 260, 25, 'jelly', 200],
+                    [170, 340, 22, 'jelly', 180],
+                    [340, 310, 22, 'puffer', 150],
+                ],
+                drops: [[100,430,FISH_COL[1],300],[180,400,FISH_COL[3],300],[260,410,FISH_COL[0],300],[340,400,FISH_COL[4],300],[420,430,FISH_COL[2],300]],
+                spinner: [320, 490],
+                pin: [250, 755, 5, 50],
+            },
+            // Ante 8: 최종 - 대형 배치
+            {
+                bumpers: [
+                    [180, 210, 24, 'jelly', 200],
+                    [310, 210, 24, 'jelly', 200],
+                    [130, 310, 20, 'puffer', 160],
+                    [360, 310, 20, 'puffer', 160],
+                    [240, 360, 26, 'jelly', 250],
+                ],
+                drops: [[110,440,FISH_COL[0],350],[190,420,FISH_COL[2],350],[270,415,FISH_COL[4],350],[350,420,FISH_COL[1],350],[430,440,FISH_COL[3],350]],
+                spinner: [240, 490],
+                pin: [250, 755, 5, 50],
+            },
+        ];
+
+        const idx = Math.min(ante - 1, maps.length - 1);
+        const m = maps[idx];
+
+        this.bumpers = m.bumpers.map(b => new Bumper(b[0], b[1], b[2], b[3], b[4]));
+        this._current_map_drops = m.drops;
+        this.spinner = new Spinner(m.spinner[0], m.spinner[1]);
+        this.pin = new Pin(m.pin[0], m.pin[1], m.pin[2], m.pin[3]);
     }
 
     _spawn_plunger() {
         this.balls.push(new Ball(this.plunger.x, 720, 0, 0, this.current_ball_type));
         this.ball_in_p = true;
+    }
+
+    _get_ante(n=null) {
+        if (n === null) n = this.round_num;
+        return Math.ceil(n / 3);
+    }
+    _get_stage(n=null) {
+        if (n === null) n = this.round_num;
+        return ((n - 1) % 3) + 1; // 1, 2, 3
+    }
+    _is_boss_round(n=null) {
+        return this._get_stage(n) === 3;
     }
 
     _get_round_target(n=null) {
@@ -1193,7 +1557,7 @@ class PinballGame {
         this.current_ball_type = null;
         this.gacha_result = null; this.gacha_result_timer = 0;
         this.shop_cursor = 0; this.shop_tab = 0;
-        this.upgrade_choices = null; this.upgrade_pick = 0;
+        this.upgrade_choices = null; this.upgrade_pick = 0; this._upgradeCooldown = 0;
         this.tilt_cnt = 0; this.tilt_lock = false; this.tilt_x = 0;
         this.multi = 1; this.combo = 0; this.combo_t = 0;
         this.next_bonus = this.bonus_th;
@@ -1211,7 +1575,7 @@ class PinballGame {
         for (const item of SHOP_ITEMS) this.upgrades[item.id] = 0;
         this.consumable_inv = []; this.deep_sea_timer = 0;
         this.consumable_draw_result = null; this.consumable_draw_timer = 0;
-        this.upgrade_choices = null; this.upgrade_pick = 0;
+        this.upgrade_choices = null; this.upgrade_pick = 0; this._upgradeCooldown = 0;
         this.shield_count = 0; this.slow_time_timer = 0; this.combo_master = false;
         this.current_ball_type = null;
         this.gacha_result = null; this.gacha_result_timer = 0;
@@ -1226,7 +1590,25 @@ class PinballGame {
 
     _start_round() {
         this.round_num++;
+
+        // Check if we completed ante 8 → victory!
+        if (this._get_ante() > 8) {
+            this.state = 'victory';
+            if (!this._testMode) {
+                if (this.score > this.high_score) {
+                    this.high_score = this.score;
+                    localStorage.setItem('pinball_high_score', this.high_score);
+                }
+                if (this.round_num - 1 > this.best_round) {
+                    this.best_round = this.round_num - 1;
+                    localStorage.setItem('pinball_best_round', this.best_round);
+                }
+            }
+            return;
+        }
+
         this.round_score = 0;
+        this.round_bonus_gold = 0;
         this.round_target = this._get_round_target();
         this.lives = 3;
         this.state = 'play';
@@ -1235,12 +1617,26 @@ class PinballGame {
         this.combo = 0; this.combo_t = 0;
         this.multiball = false; this.multiball_t = 0;
         this.multi = 1;
+        this.boss_killed_gold = 0;
 
         // Reset active consumable effects (inventory persists)
         this.deep_sea_timer = 0;
         this.shield_count = 0;
         this.slow_time_timer = 0;
         this.combo_master = false;
+
+        // Setup new map layout when ante changes (stage 1)
+        if (this._get_stage() === 1 || this.round_num === 1) {
+            this._setup_map(this._get_ante());
+        }
+
+        // Spawn boss on boss rounds (stage 3 of each ante)
+        if (this._is_boss_round()) {
+            const ante = this._get_ante();
+            this.boss = new Boss(WIDTH / 2, 180, ante);
+        } else {
+            this.boss = null;
+        }
 
         this._reset_drops();
         this._spawn_plunger();
@@ -1252,7 +1648,12 @@ class PinballGame {
         const gold_mult = bt_eff.gold_mult || 1.0;
         const alive_balls = this.balls.filter(b => b.active).length;
         const ball_bonus = alive_balls * 2; // +2G per remaining ball
-        this.gold_earned = Math.floor((Math.floor(this.round_score / GOLD_PER_SCORE) + this.round_num*2)*gold_mult) + ball_bonus;
+        const bumper_gold = this.round_bonus_gold || 0;
+        const boss_gold = this.boss_killed_gold || 0;
+        const base_gold = GOLD_PER_ROUND;
+        this.gold_earned = Math.floor((base_gold + bumper_gold + boss_gold) * gold_mult) + ball_bonus;
+        this.bumper_gold_earned = bumper_gold;
+        this.boss_gold_earned = boss_gold;
         this.ball_bonus_gold = ball_bonus;
         this.gold += this.gold_earned;
         this.state = 'round_clear';
@@ -1288,6 +1689,30 @@ class PinballGame {
         }
     }
 
+    _flipper_on(side) {
+        const debuff = this.boss ? this.boss.debuff : null;
+        if (debuff === 'flip_lock_left' && side === 'left') return;
+        if (debuff === 'flip_lock_right' && side === 'right') return;
+        if (debuff === 'flip_reverse') {
+            // Reversed: left input → right flipper, right → left
+            if (side === 'left') { this.rf.on = true; sndFlip(); }
+            else { this.lf.on = true; sndFlip(); }
+        } else {
+            if (side === 'left') { this.lf.on = true; sndFlip(); }
+            else { this.rf.on = true; sndFlip(); }
+        }
+    }
+    _flipper_off(side) {
+        const debuff = this.boss ? this.boss.debuff : null;
+        if (debuff === 'flip_reverse') {
+            if (side === 'left') this.rf.on = false;
+            else this.lf.on = false;
+        } else {
+            if (side === 'left') this.lf.on = false;
+            else this.rf.on = false;
+        }
+    }
+
     _shop_buy() {
         if (this.shop_tab === 0) {
             // Upgrade draw - show 2 choices
@@ -1302,6 +1727,8 @@ class PinballGame {
     }
 
     _upgrade_draw() {
+        if (this.upgrade_choices) return; // already choosing
+        if (this._upgradeCooldown > 0) return; // cooldown after pick
         if (this.gold < UPGRADE_DRAW_COST) return;
         // Check if any upgrades available
         const available = SHOP_ITEMS.filter(item => this.upgrades[item.id] < item.max_lv);
@@ -1325,6 +1752,7 @@ class PinballGame {
         this.upgrades[chosen.id]++;
         this._apply_upgrades();
         this.upgrade_choices = null;
+        this._upgradeCooldown = 15; // prevent immediate re-draw
     }
 
     _consumable_draw() {
@@ -1412,6 +1840,7 @@ class PinballGame {
         }
         if (this.state === 'shop') {
             if (this._stateChangeCooldown > 0) this._stateChangeCooldown--;
+            if (this._upgradeCooldown > 0) this._upgradeCooldown--;
             if (this.gacha_result_timer > 0) this.gacha_result_timer--;
             if (this.consumable_draw_timer > 0) this.consumable_draw_timer--;
             // Next round hold logic
@@ -1445,6 +1874,13 @@ class PinballGame {
 
         this.lf.update(); this.rf.update(); this.plunger.update();
         for (const b of this.bumpers) b.update();
+        if (this.boss) {
+            this.boss.update();
+            if (this.boss.heal_flash === 29) { // just healed
+                this._spawn_fx(this.boss.x, this.boss.y, [80,255,120], 15, 3, 25, 3);
+                this.popups.push(new ScorePopup(this.boss.x, this.boss.y - this.boss.r - 10, '💚 회복!', [80,255,120]));
+            }
+        }
         this.pin.update();
         for (const s of this.slings) s.update();
         for (const d of this.drops) d.update();
@@ -1458,7 +1894,8 @@ class PinballGame {
         const tilt = this.tilt_lock ? 0 : this.tilt_x;
         const bt_eff = (this.current_ball_type || {}).effects || {};
         const slow_mult = this.slow_time_timer > 0 ? 0.5 : 1.0;
-        const ball_grav = this.gravity_val * (bt_eff.gravity_mult || 1.0) * slow_mult;
+        const boss_grav = (this.boss && this.boss.debuff === 'gravity_up') ? 1.5 : 1.0;
+        const ball_grav = this.gravity_val * (bt_eff.gravity_mult || 1.0) * slow_mult * boss_grav;
 
         const drained = [];
         const split_spawns = [];
@@ -1472,9 +1909,19 @@ class PinballGame {
             }
 
             const spd = Math.hypot(ball.vx, ball.vy);
-            const n_steps = Math.max(2, Math.floor(spd / BALL_R) + 1);
+            const n_steps = Math.max(4, Math.floor(spd / BALL_R) + 1);
             const sub_dt = 1.0 / n_steps;
+
+            // Store flipper final angles for interpolation
+            const lf_final = this.lf.angle, rf_final = this.rf.angle;
+            const lf_prev = this.lf.prev_angle, rf_prev = this.rf.prev_angle;
+
             for (let si=0; si<n_steps; si++) {
+                // Interpolate flipper angles for this substep
+                const st = (si + 1) / n_steps;
+                this.lf.angle = lf_prev + (lf_final - lf_prev) * st;
+                this.rf.angle = rf_prev + (rf_final - rf_prev) * st;
+
                 ball.step(tilt, sub_dt, ball_grav);
 
                 if (ball.collide_walls(WALLS)) sndWall();
@@ -1497,8 +1944,29 @@ class PinballGame {
                         this._add_score(bmp_pts, bmp.x, bmp.y - 20);
                         this._spawn_fx(ball.x, ball.y, bmp.style==='puffer'?PUFFER_Y:JELLY_P, 10, 4, 20, 3);
                         sndBump();
+                        // +1 gold per jellyfish hit only
+                        if (bmp.style === 'jelly') {
+                            this.round_bonus_gold++;
+                            this.popups.push(new ScorePopup(bmp.x + 20, bmp.y - 35, '+1G', GOLD_C));
+                        }
                         if ((bt_eff.split_chance || 0) > 0) {
                             if (Math.random() < bt_eff.split_chance) split_spawns.push([ball.x, ball.y]);
+                        }
+                    }
+                }
+
+                // Boss collision
+                if (this.boss && this.boss.alive) {
+                    if (this.boss.collide_ball(ball)) {
+                        this._spawn_fx(ball.x, ball.y, [120,100,60], 8, 3, 18, 2);
+                        this.popups.push(new ScorePopup(this.boss.x, this.boss.y - this.boss.r - 25,
+                            `HP -1 (${this.boss.hp}/${this.boss.max_hp})`, [255, 200, 80]));
+                        sndBump();
+                        if (!this.boss.alive) {
+                            // Boss defeated!
+                            this.boss_killed_gold = BOSS_GOLD_REWARD;
+                            this.popups.push(new ScorePopup(this.boss.x, this.boss.y - 40, `+${BOSS_GOLD_REWARD}G BOSS!`, GOLD_C));
+                            this._spawn_fx(this.boss.x, this.boss.y, [200,180,100], 30, 6, 40, 4);
                         }
                     }
                 }
@@ -1533,6 +2001,10 @@ class PinballGame {
                     sndSpin();
                 }
             }
+
+            // Restore final flipper angles after substep interpolation
+            this.lf.angle = lf_final;
+            this.rf.angle = rf_final;
 
             ball.update_trail();
 
@@ -1613,7 +2085,12 @@ class PinballGame {
         this.popups = this.popups.filter(p => p.update());
         for (const b of this.bubbles) b.update(this.t);
 
-        if (this.round_score >= this.round_target) this._complete_round();
+        // Round clear condition: boss round = kill boss, normal = reach target score
+        if (this.boss) {
+            if (!this.boss.alive && this.boss.death_t <= 0) this._complete_round();
+        } else {
+            if (this.round_score >= this.round_target) this._complete_round();
+        }
     }
 
     // ============================================================
@@ -1662,17 +2139,26 @@ class PinballGame {
         ctx.fillRect(0, 0, WIDTH, 36);
         drawLine(0, 36, WIDTH, 36, BALATRO_BLUE, 1);
 
-        fillText(`ROUND ${this.round_num}`, 8, 15, BALATRO_GOLD, '14px "Malgun Gothic", sans-serif', 'left');
+        const ante = this._get_ante();
+        const stage = this._get_stage();
+        const isBoss = this._is_boss_round();
+        fillText(`ANTE ${ante} - ${stage}/3${isBoss ? ' 🗑️BOSS' : ''}`, 8, 15, isBoss ? [255,180,80] : BALATRO_GOLD, '14px "Malgun Gothic", sans-serif', 'left');
         if (this._testMode) fillText("TEST", 8, 32, BALATRO_ORANGE, '10px "Malgun Gothic", sans-serif', 'left');
         fillText(`${this.round_score.toLocaleString()}`, WIDTH/2, 18, WHITE, '20px "Malgun Gothic", sans-serif', 'center');
-        fillText(`GOAL ${this.round_target.toLocaleString()}`, WIDTH-8, 15, [200,200,220], '14px "Malgun Gothic", sans-serif', 'right');
 
-        // Progress bar
-        const prog = Math.min(1, this.round_score / Math.max(1, this.round_target));
+        let prog;
+        if (this.boss) {
+            const bossLabel = this.boss.alive ? `🗑️ HP ${this.boss.hp}/${this.boss.max_hp}` : '🗑️ 처치!';
+            fillText(bossLabel, WIDTH-8, 15, this.boss.alive ? [255,180,80] : [100,255,100], 'bold 14px "Malgun Gothic", sans-serif', 'right');
+            prog = this.boss.alive ? 1 - (this.boss.hp / this.boss.max_hp) : 1;
+        } else {
+            fillText(`GOAL ${this.round_target.toLocaleString()}`, WIDTH-8, 15, [200,200,220], '14px "Malgun Gothic", sans-serif', 'right');
+            prog = Math.min(1, this.round_score / Math.max(1, this.round_target));
+        }
         const bar_w = WIDTH - 16;
         fillRect(8, 22, bar_w, 5, [15,30,60]);
         if (prog > 0) {
-            const bar_col = lerp_col(BALATRO_BLUE, BALATRO_GOLD, prog);
+            const bar_col = this.boss ? lerp_col([180,60,40], [255,200,80], prog) : lerp_col(BALATRO_BLUE, BALATRO_GOLD, prog);
             fillRect(8, 22, Math.round(bar_w*prog), 5, bar_col);
         }
         ctx.strokeStyle = rgb([40,70,120]); ctx.lineWidth=1;
@@ -1680,13 +2166,33 @@ class PinballGame {
 
         fillText(`TOTAL ${this.score.toLocaleString()}`, WIDTH/2, 33, [160,180,210], '12px "Malgun Gothic", sans-serif', 'center');
 
+        // Boss debuff warning
+        if (this.boss && this.boss.debuff && this.boss.alive) {
+            const debuffNames = {
+                'flip_lock_left': '🔒 왼쪽 플리퍼 잠금!',
+                'flip_lock_right': '🔒 오른쪽 플리퍼 잠금!',
+                'flip_reverse': '🔄 플리퍼 반전!',
+                'heal': '💚 체력 회복!',
+                'gravity_up': '⬇️ 중력 증가!'
+            };
+            const dName = debuffNames[this.boss.debuff] || '';
+            const flash = Math.sin(this.t * 0.2) > 0;
+            if (flash) {
+                ctx.fillStyle = 'rgba(180,40,40,0.6)';
+                roundRect(WIDTH/2 - 80, 38, 160, 22, 6);
+                ctx.fill();
+                fillText(dName, WIDTH/2, 53, [255,220,180], 'bold 13px "Malgun Gothic", sans-serif', 'center');
+            }
+        }
+
         // Bottom bar
         const b_y = HEIGHT - 22;
         ctx.fillStyle = 'rgba(20,40,80,0.7)';
         ctx.fillRect(0, b_y, WIDTH, 22);
         drawLine(0, b_y, WIDTH, b_y, BALATRO_BLUE, 1);
 
-        fillText(`$${this.gold}`, 8, b_y+15, BALATRO_GOLD, '14px "Malgun Gothic", sans-serif', 'left');
+        const bGold = this.round_bonus_gold || 0;
+        fillText(`$${this.gold}  (+${bGold})`, 8, b_y+15, BALATRO_GOLD, '14px "Malgun Gothic", sans-serif', 'left');
 
         // Lives
         let lx = 65;
@@ -1995,13 +2501,26 @@ class PinballGame {
         for (const p of this.particles) { p.update(); p.draw(); }
 
         const y_off = Math.sin(this.t*0.08)*5;
-        fillText(`라운드 ${this.round_num} 클리어!`, WIDTH/2, 280+y_off, GOLD_C, '42px "Malgun Gothic", sans-serif', 'center');
-        fillText(`라운드 점수: ${this.round_score.toLocaleString()}`, WIDTH/2, 360, WHITE, '20px "Malgun Gothic", sans-serif', 'center');
-        fillText(`획득 골드: +${this.gold_earned}`, WIDTH/2, 410, GOLD_C, '26px "Malgun Gothic", sans-serif', 'center');
-        if (this.ball_bonus_gold > 0) {
-            fillText(`(남은 공 보너스: +${this.ball_bonus_gold}G)`, WIDTH/2, 440, [200,220,150], '14px "Malgun Gothic", sans-serif', 'center');
+        const rcAnte = this._get_ante();
+        const rcStage = this._get_stage();
+        fillText(`앤티 ${rcAnte} - ${rcStage}/3 클리어!`, WIDTH/2, 260+y_off, [180,200,230], '16px "Malgun Gothic", sans-serif', 'center');
+        fillText(`라운드 ${this.round_num} 클리어!`, WIDTH/2, 300+y_off, GOLD_C, '36px "Malgun Gothic", sans-serif', 'center');
+        if (this.boss_gold_earned > 0) {
+            fillText(`🗑️ 보스 처치! +${this.boss_gold_earned}G`, WIDTH/2, 340, [255,200,80], 'bold 18px "Malgun Gothic", sans-serif', 'center');
         }
-        fillText(`총 점수: ${this.score.toLocaleString()}`, WIDTH/2, 465, [150,180,220], '14px "Malgun Gothic", sans-serif', 'center');
+        fillText(`라운드 점수: ${this.round_score.toLocaleString()}`, WIDTH/2, 370, WHITE, '18px "Malgun Gothic", sans-serif', 'center');
+        fillText(`획득 골드: +${this.gold_earned}G`, WIDTH/2, 410, GOLD_C, '24px "Malgun Gothic", sans-serif', 'center');
+        let detailY = 432;
+        const details = [];
+        details.push(`기본 ${GOLD_PER_ROUND}G`);
+        if (this.bumper_gold_earned > 0) details.push(`범퍼 +${this.bumper_gold_earned}G`);
+        if (this.boss_gold_earned > 0) details.push(`보스 +${this.boss_gold_earned}G`);
+        if (this.ball_bonus_gold > 0) details.push(`남은 공 +${this.ball_bonus_gold}G`);
+        if (details.length > 1) {
+            fillText(`(${details.join(' / ')})`, WIDTH/2, detailY, [200,220,150], '13px "Malgun Gothic", sans-serif', 'center');
+            detailY += 22;
+        }
+        fillText(`총 점수: ${this.score.toLocaleString()}`, WIDTH/2, detailY + 10, [150,180,220], '14px "Malgun Gothic", sans-serif', 'center');
 
         if (Math.floor(this.t/30)%2) {
             fillText("Space로 건너뛰기", WIDTH/2, 540, [120,140,180], '14px "Malgun Gothic", sans-serif', 'center');
@@ -2026,7 +2545,10 @@ class PinballGame {
         fillText("상    점", WIDTH/2, 38, WHITE, '32px "Malgun Gothic", sans-serif', 'center');
 
         const next_target = this._get_round_target(this.round_num+1);
-        fillText(`R${this.round_num} 클리어  |  다음 목표: ${next_target.toLocaleString()}`, WIDTH/2, 60, SKY_SEA, '13px "Malgun Gothic", sans-serif', 'center');
+        const shopAnte = this._get_ante();
+        const shopStage = this._get_stage();
+        const nextIsBoss = this._is_boss_round(this.round_num + 1);
+        fillText(`앤티 ${shopAnte} (${shopStage}/3)  |  다음: ${next_target.toLocaleString()}${nextIsBoss ? ' 🗑️BOSS' : ''}`, WIDTH/2, 60, nextIsBoss ? [255,180,80] : SKY_SEA, '13px "Malgun Gothic", sans-serif', 'center');
 
         fillText(`💰 ${this.gold}G`, 40, 82, GOLD_C, 'bold 18px "Malgun Gothic", sans-serif', 'left');
         fillText(`❤️ ${this.lives}`, WIDTH-40, 82, PEARL, '14px "Malgun Gothic", sans-serif', 'right');
@@ -2160,7 +2682,7 @@ class PinballGame {
                 // Hints
                 const isMobile = ('ontouchstart' in window);
                 if (!isMobile) {
-                    fillText('← → 선택  |  Space 확정  |  Esc 취소', WIDTH/2, 360, [120,140,170], '12px "Malgun Gothic", sans-serif', 'center');
+                    fillText('← → 선택  |  Space 확정', WIDTH/2, 360, [120,140,170], '12px "Malgun Gothic", sans-serif', 'center');
                 } else {
                     fillText('카드를 터치하여 선택', WIDTH/2, 360, [120,140,170], '14px "Malgun Gothic", sans-serif', 'center');
                 }
@@ -2364,7 +2886,9 @@ class PinballGame {
             fillText("[ 테스트 모드 ]", WIDTH/2, 230, BALATRO_ORANGE, '16px "Malgun Gothic", sans-serif', 'center');
         }
         fillText("게임 오버", WIDTH/2, 270, [255,100,100], '42px "Malgun Gothic", sans-serif', 'center');
-        fillText(`도달 라운드: ${this.round_num}`, WIDTH/2, 330, GOLD_C, '26px "Malgun Gothic", sans-serif', 'center');
+        const goAnte = this._get_ante();
+        const goStage = this._get_stage();
+        fillText(`앤티 ${goAnte} - ${goStage}/3  (라운드 ${this.round_num})`, WIDTH/2, 330, GOLD_C, '22px "Malgun Gothic", sans-serif', 'center');
         fillText(`최종 점수: ${this.score.toLocaleString()}`, WIDTH/2, 380, WHITE, '20px "Malgun Gothic", sans-serif', 'center');
 
         if (!this._testMode && this.score >= this.high_score && this.score > 0) {
@@ -2390,12 +2914,67 @@ class PinballGame {
         }
     }
 
+    _draw_victory() {
+        this._draw_bg();
+
+        // Celebration particles
+        if (this.t % 5 === 0) {
+            for (let i = 0; i < 5; i++) {
+                this.particles.push(new Particle(
+                    randUniform(30, WIDTH - 30), randUniform(100, 400),
+                    randUniform(-3, 3), randUniform(-4, -1),
+                    randChoice([GOLD_C, [255,220,100], [100,255,200], [100,180,255], [255,150,200]]),
+                    randInt(30, 60), randInt(2, 6)));
+            }
+        }
+        for (const p of this.particles) { p.update(); p.draw(); }
+
+        // Gold shimmer overlay
+        ctx.fillStyle = 'rgba(255,220,80,0.03)';
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+        const y_off = Math.sin(this.t * 0.06) * 5;
+
+        fillText("🎉", WIDTH/2, 180 + y_off, WHITE, '60px "Malgun Gothic", sans-serif', 'center');
+        fillText("게임 클리어!", WIDTH/2, 260 + y_off, GOLD_C, '42px "Malgun Gothic", sans-serif', 'center');
+        fillText("8앤티를 모두 돌파했습니다!", WIDTH/2, 310, [200, 230, 255], '18px "Malgun Gothic", sans-serif', 'center');
+
+        fillText(`최종 점수: ${this.score.toLocaleString()}`, WIDTH/2, 370, WHITE, '22px "Malgun Gothic", sans-serif', 'center');
+        fillText(`도달 라운드: ${this.round_num}`, WIDTH/2, 405, [180, 200, 230], '16px "Malgun Gothic", sans-serif', 'center');
+
+        if (!this._testMode && this.score > 0) {
+            if (this.score >= this.high_score) {
+                fillText("🏆 새로운 최고 기록!", WIDTH/2, 445, GOLD_C, 'bold 20px "Malgun Gothic", sans-serif', 'center');
+            }
+        }
+
+        // Upgrades summary
+        let uy = 490;
+        const has_upgrades = Object.values(this.upgrades).some(v => v > 0);
+        if (has_upgrades) {
+            fillText("이번 런 업그레이드:", WIDTH/2, uy, [150,180,220], '14px "Malgun Gothic", sans-serif', 'center');
+            uy += 20;
+            for (const item of SHOP_ITEMS) {
+                const lv = this.upgrades[item.id];
+                if (lv > 0) {
+                    fillText(`${item.icon} ${item.name} Lv.${lv}`, WIDTH/2, uy, SKY_SEA, '13px "Malgun Gothic", sans-serif', 'center');
+                    uy += 17;
+                }
+            }
+        }
+
+        if (Math.floor(this.t / 35) % 2) {
+            fillText("스페이스 키로 메뉴로", WIDTH/2, HEIGHT - 80, WHITE, '18px "Malgun Gothic", sans-serif', 'center');
+        }
+    }
+
     _draw() {
         ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
         if (this.state === 'menu') this._draw_menu();
         else if (this.state === 'test_setup') this._draw_test_setup();
         else if (this.state === 'gameover') this._draw_gameover();
+        else if (this.state === 'victory') this._draw_victory();
         else if (this.state === 'round_clear') this._draw_round_clear();
         else if (this.state === 'shop') this._draw_shop();
         else if (this.state === 'play') {
@@ -2404,6 +2983,7 @@ class PinballGame {
             for (const sl of this.slings) sl.draw(this.t);
             for (const dt of this.drops) dt.draw(this.t);
             for (const bm of this.bumpers) bm.draw(this.t);
+            if (this.boss) this.boss.draw(this.t);
             this.pin.draw(this.t);
             this.spinner.draw(this.t);
             this.lf.draw(); this.rf.draw();
@@ -2552,7 +3132,7 @@ class PinballGame {
             this._onKeyDown('Space');
             return;
         }
-        if (this.state === 'gameover' || this.state === 'round_clear') {
+        if (this.state === 'gameover' || this.state === 'victory' || this.state === 'round_clear') {
             this._onKeyDown('Space');
             return;
         }
@@ -2594,7 +3174,7 @@ class PinballGame {
         if (this.state === 'shop') {
             if (this._stateChangeCooldown > 0) return; // ignore touch during cooldown
 
-            // Upgrade choice overlay touch
+            // Upgrade choice overlay touch - must pick one
             if (this.upgrade_choices) {
                 const cardW = 150, cardH = 200, gap = 20;
                 const totalCW = this.upgrade_choices.length * cardW + (this.upgrade_choices.length - 1) * gap;
@@ -2609,11 +3189,7 @@ class PinballGame {
                         return;
                     }
                 }
-                // Touch outside cards = cancel
-                if (y > cy + cardH + 30 || y < cy - 30) {
-                    this.upgrade_choices = null;
-                }
-                return;
+                return; // ignore all other touches, must pick a card
             }
 
             // Tab bar touch (y: 95 to 123)
@@ -2701,11 +3277,11 @@ class PinballGame {
 
             // Left flipper zone: left 35%
             if (x < WIDTH*0.35 && y > HEIGHT*0.5) {
-                this.lf.on = true; sndFlip(); return;
+                this._flipper_on('left'); return;
             }
             // Right flipper zone: right 35%
             if (x > WIDTH*0.65 && y > HEIGHT*0.5) {
-                this.rf.on = true; sndFlip(); return;
+                this._flipper_on('right'); return;
             }
             // Plunger zone: center bottom
             if (x > WIDTH*0.35 && x < WIDTH*0.65 && y > HEIGHT*0.75) {
@@ -2743,8 +3319,8 @@ class PinballGame {
                 if (t.x < WIDTH*0.35 && t.y > HEIGHT*0.5) anyLeft = true;
                 if (t.x > WIDTH*0.65 && t.y > HEIGHT*0.5) anyRight = true;
             }
-            if (!anyLeft) this.lf.on = false;
-            if (!anyRight) this.rf.on = false;
+            if (!anyLeft) this._flipper_off('left');
+            if (!anyRight) this._flipper_off('right');
 
             // Plunger release
             if (id === this._plungerTouch) {
@@ -2793,7 +3369,7 @@ class PinballGame {
 
             while (accumulator >= frameDur) {
                 this._update();
-                this.t += (this.state !== 'play') ? 1 : 0;
+                if (this.state !== 'play') this.t++;
                 accumulator -= frameDur;
             }
 
@@ -2809,6 +3385,15 @@ class PinballGame {
 //  START
 // ============================================================
 const game = new PinballGame();
+
+// Query params: ?test=true&round=7&gold=100
+const _urlParams = new URLSearchParams(window.location.search);
+if (_urlParams.get('test') === 'true') {
+    game._testRound = parseInt(_urlParams.get('round')) || 1;
+    game._testGold = parseInt(_urlParams.get('gold')) || 100;
+    game._startTest();
+}
+
 game.run();
 
 // Register Service Worker for PWA
@@ -2818,3 +3403,4 @@ if ('serviceWorker' in navigator) {
 </script>
 </body>
 </html>
+레
