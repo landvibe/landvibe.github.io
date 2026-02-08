@@ -120,13 +120,22 @@ const WALLS = [
 //  SHOP ITEMS
 // ============================================================
 const SHOP_ITEMS = [
-    {id:'flipper_power', name:'플리퍼 강화', desc:'플리퍼 힘 +15%', max_lv:5, costs:[3,5,8,12,18]},
-    {id:'gravity', name:'가벼운 공', desc:'중력 -10%', max_lv:5, costs:[3,5,8,12,18]},
-    {id:'extra_life', name:'추가 생명', desc:'생명 +1 회복', max_lv:5, costs:[5,8,12,18,25]},
-    {id:'score_boost', name:'점수 부스트', desc:'기본 배율 +0.2', max_lv:5, costs:[4,7,11,16,22]},
-    {id:'bumper_bonus', name:'범퍼 보너스', desc:'범퍼 점수 +30%', max_lv:5, costs:[3,5,8,12,18]},
-    {id:'flipper_size', name:'큰 플리퍼', desc:'플리퍼 길이 +10', max_lv:5, costs:[4,6,10,15,21]},
+    {id:'flipper_power', name:'플리퍼 강화', desc:'플리퍼 힘 +15%', max_lv:5, icon:'💪'},
+    {id:'gravity', name:'가벼운 공', desc:'중력 -10%', max_lv:5, icon:'🎈'},
+    {id:'score_boost', name:'점수 부스트', desc:'기본 배율 +0.2', max_lv:5, icon:'📈'},
+    {id:'bumper_bonus', name:'범퍼 보너스', desc:'범퍼 점수 +30%', max_lv:5, icon:'💥'},
+    {id:'flipper_size', name:'큰 플리퍼', desc:'플리퍼 길이 +10', max_lv:5, icon:'📏'},
 ];
+const UPGRADE_DRAW_COST = 5;
+
+const CONSUMABLES = [
+    {id:'deep_sea', name:'심해 보너스', desc:'10초간 점수 3배', color:[60,180,255], icon:'🌊', weight:20},
+    {id:'shield', name:'방어막', desc:'1회 드레인 방지', color:[100,255,200], icon:'🛡️', weight:25},
+    {id:'slow_time', name:'슬로우 타임', desc:'8초간 중력 50% 감소', color:[180,140,255], icon:'🐌', weight:25},
+    {id:'combo_master', name:'콤보 마스터', desc:'콤보 유지시간 2배', color:[255,160,60], icon:'🔥', weight:18},
+    {id:'temp_life', name:'임시 생명', desc:'이번 라운드 생명 +1', color:[255,100,120], icon:'❤️', weight:12},
+];
+const CONSUMABLE_DRAW_COST = 4;
 
 // ============================================================
 //  BALL TYPES (Gacha)
@@ -950,7 +959,9 @@ class PinballGame {
         this._testRound = 1;
         this._testGold = 50;
         this._testCursor = 0; // 0=round, 1=gold, 2=start
-        this.score = 0; this.high_score = 0; this.lives = 3;
+        this.score = 0; this.lives = 3;
+        this.high_score = parseInt(localStorage.getItem('pinball_high_score')) || 0;
+        this.best_round = parseInt(localStorage.getItem('pinball_best_round')) || 0;
         this.tilt_cnt = 0; this.tilt_lock = false; this.tilt_x = 0;
         this.t = 0; this.multi = 1;
         this.combo = 0; this.combo_t = 0;
@@ -959,9 +970,23 @@ class PinballGame {
         this.round_num = 0; this.round_score = 0; this.round_target = 0;
         this.gold = 0; this.gold_earned = 0; this.round_clear_timer = 0;
         this.shop_cursor = 0;
+        this.shop_tab = 0; // 0=강화 뽑기, 1=소모품 뽑기, 2=공 뽑기
         this.upgrades = {};
         for (const item of SHOP_ITEMS) this.upgrades[item.id] = 0;
-        this.best_round = 0;
+        this.upgrade_choices = null; // [item, item] two choices
+        this.upgrade_pick = 0; // 0 or 1
+
+        // Consumables inventory (persists across rounds, max 2 slots)
+        this.consumable_inv = []; // array of consumable ids in inventory
+        this.consumable_max = 2;
+        this.consumable_draw_result = null; // last drawn consumable
+        this.consumable_draw_timer = 0;
+        this.consumable_open = false; // pause menu open
+        this.consumable_cursor = 0; // selected slot in pause menu
+        this.deep_sea_timer = 0;
+        this.shield_count = 0;
+        this.slow_time_timer = 0;
+        this.combo_master = false;
 
         // Ball gacha
         this.current_ball_type = null;
@@ -1054,12 +1079,49 @@ class PinballGame {
         } else if (this.state === 'round_clear') {
             if (code === 'Space') this.round_clear_timer = 0;
         } else if (this.state === 'shop') {
-            const total = SHOP_ITEMS.length + 1;
+            // If upgrade choices are shown, handle pick
+            if (this.upgrade_choices) {
+                if (code === 'ArrowLeft') this.upgrade_pick = 0;
+                else if (code === 'ArrowRight') this.upgrade_pick = 1;
+                else if (code === 'Space' || code === 'Enter') this._upgrade_pick_confirm();
+                else if (code === 'Escape') this.upgrade_choices = null;
+                return;
+            }
+            const tabCounts = [1, 1, 1]; // items per tab (draw buttons)
+            const total = tabCounts[this.shop_tab];
             if (code === 'ArrowUp') this.shop_cursor = (this.shop_cursor - 1 + total) % total;
             else if (code === 'ArrowDown') this.shop_cursor = (this.shop_cursor + 1) % total;
+            else if (code === 'ArrowLeft') { this.shop_tab = (this.shop_tab - 1 + 3) % 3; this.shop_cursor = 0; }
+            else if (code === 'ArrowRight') { this.shop_tab = (this.shop_tab + 1) % 3; this.shop_cursor = 0; }
             else if (code === 'Space') this._shop_buy();
             else if (code === 'Enter') this._nextRoundHolding = true;
         } else if (this.state === 'play') {
+            // Consumable pause menu
+            if (this.consumable_open) {
+                if (code === 'Escape' || code === 'KeyQ' || code === 'Tab') {
+                    this.consumable_open = false;
+                } else if (code === 'ArrowLeft') {
+                    this.consumable_cursor = Math.max(0, this.consumable_cursor - 1);
+                } else if (code === 'ArrowRight') {
+                    this.consumable_cursor = Math.min(this.consumable_inv.length - 1, this.consumable_cursor);
+                    if (this.consumable_cursor < this.consumable_inv.length - 1) this.consumable_cursor++;
+                } else if (code === 'Space' || code === 'Enter') {
+                    if (this.consumable_inv.length > 0 && this.consumable_cursor < this.consumable_inv.length) {
+                        this._use_consumable(this.consumable_cursor);
+                        if (this.consumable_inv.length === 0) this.consumable_open = false;
+                        else this.consumable_cursor = Math.min(this.consumable_cursor, this.consumable_inv.length - 1);
+                    }
+                }
+                return; // block other play inputs while menu is open
+            }
+
+            if (code === 'KeyQ' || code === 'Tab') {
+                if (this.consumable_inv.length > 0) {
+                    this.consumable_open = true;
+                    this.consumable_cursor = 0;
+                }
+                return;
+            }
             if (code === 'KeyZ' || code === 'ShiftLeft') { this.lf.on = true; sndFlip(); }
             if (code === 'Slash' || code === 'ShiftRight') { this.rf.on = true; sndFlip(); }
             if (code === 'Space' && this.ball_in_p) this.plunger.charging = true;
@@ -1105,7 +1167,8 @@ class PinballGame {
 
     _get_round_target(n=null) {
         if (n === null) n = this.round_num;
-        return ROUND_BASE_TARGET + (n-1)*ROUND_SCALE + Math.floor(Math.pow(n-1, 1.5)*200);
+        const base = ROUND_BASE_TARGET + (n-1)*ROUND_SCALE + Math.floor(Math.pow(n-1, 1.5)*200);
+        return this._testMode ? Math.floor(base / 5) : base;
     }
 
     _apply_upgrades() {
@@ -1124,9 +1187,13 @@ class PinballGame {
         this.round_num = 0; this.gold = 0;
         this.upgrades = {};
         for (const item of SHOP_ITEMS) this.upgrades[item.id] = 0;
+        this.consumable_inv = []; this.deep_sea_timer = 0;
+        this.consumable_draw_result = null; this.consumable_draw_timer = 0;
+        this.shield_count = 0; this.slow_time_timer = 0; this.combo_master = false;
         this.current_ball_type = null;
         this.gacha_result = null; this.gacha_result_timer = 0;
-        this.shop_cursor = 0;
+        this.shop_cursor = 0; this.shop_tab = 0;
+        this.upgrade_choices = null; this.upgrade_pick = 0;
         this.tilt_cnt = 0; this.tilt_lock = false; this.tilt_x = 0;
         this.multi = 1; this.combo = 0; this.combo_t = 0;
         this.next_bonus = this.bonus_th;
@@ -1142,9 +1209,13 @@ class PinballGame {
         this.gold = this._testGold;
         this.upgrades = {};
         for (const item of SHOP_ITEMS) this.upgrades[item.id] = 0;
+        this.consumable_inv = []; this.deep_sea_timer = 0;
+        this.consumable_draw_result = null; this.consumable_draw_timer = 0;
+        this.upgrade_choices = null; this.upgrade_pick = 0;
+        this.shield_count = 0; this.slow_time_timer = 0; this.combo_master = false;
         this.current_ball_type = null;
         this.gacha_result = null; this.gacha_result_timer = 0;
-        this.shop_cursor = 0;
+        this.shop_cursor = 0; this.shop_tab = 0;
         this.tilt_cnt = 0; this.tilt_lock = false; this.tilt_x = 0;
         this.multi = 1; this.combo = 0; this.combo_t = 0;
         this.next_bonus = this.bonus_th;
@@ -1164,6 +1235,13 @@ class PinballGame {
         this.combo = 0; this.combo_t = 0;
         this.multiball = false; this.multiball_t = 0;
         this.multi = 1;
+
+        // Reset active consumable effects (inventory persists)
+        this.deep_sea_timer = 0;
+        this.shield_count = 0;
+        this.slow_time_timer = 0;
+        this.combo_master = false;
+
         this._reset_drops();
         this._spawn_plunger();
         this._apply_upgrades();
@@ -1179,19 +1257,24 @@ class PinballGame {
         this.gold += this.gold_earned;
         this.state = 'round_clear';
         this.round_clear_timer = 150;
-        if (!this._testMode && this.round_num > this.best_round) this.best_round = this.round_num;
+        if (!this._testMode && this.round_num > this.best_round) {
+            this.best_round = this.round_num;
+            localStorage.setItem('pinball_best_round', this.best_round);
+        }
         sndRoundClear();
     }
 
     _add_score(pts, x, y) {
         const bt_eff = (this.current_ball_type || {}).effects || {};
         const ball_score_mult = bt_eff.score_mult || 1.0;
-        const actual = Math.floor(pts * this.multi * this.base_multi * ball_score_mult);
+        const deep_sea_mult = this.deep_sea_timer > 0 ? 3.0 : 1.0;
+        const actual = Math.floor(pts * this.multi * this.base_multi * ball_score_mult * deep_sea_mult);
         this.score += actual; this.round_score += actual;
-        const has_mult = this.multi > 1 || this.base_multi > 1.0 || ball_score_mult > 1.0;
+        const has_mult = this.multi > 1 || this.base_multi > 1.0 || ball_score_mult > 1.0 || deep_sea_mult > 1;
         this.popups.push(new ScorePopup(x, y, `+${actual}`, has_mult ? GOLD_C : SCORE_C));
         const combo_ext = bt_eff.combo_extend || 1.0;
-        this.combo++; this.combo_t = Math.floor(120*combo_ext);
+        const combo_master_mult = this.combo_master ? 2.0 : 1.0;
+        this.combo++; this.combo_t = Math.floor(120*combo_ext*combo_master_mult);
         if (this.score >= this.next_bonus && !this.bonus.active) {
             this.bonus.start(); this.next_bonus += this.bonus_th; sndBonus();
         }
@@ -1206,18 +1289,95 @@ class PinballGame {
     }
 
     _shop_buy() {
-        if (this.shop_cursor === SHOP_ITEMS.length) { this._gacha_draw(); return; }
-        const item = SHOP_ITEMS[this.shop_cursor];
-        const lv = this.upgrades[item.id];
-        if (lv >= item.max_lv) return;
-        const cost = item.costs[lv];
-        if (this.gold >= cost) {
-            this.gold -= cost;
-            this.upgrades[item.id]++;
-            if (item.id === 'extra_life') this.lives++;
-            this._apply_upgrades();
-            sndBuy();
+        if (this.shop_tab === 0) {
+            // Upgrade draw - show 2 choices
+            this._upgrade_draw();
+        } else if (this.shop_tab === 1) {
+            // Consumable gacha draw
+            this._consumable_draw();
+        } else if (this.shop_tab === 2) {
+            // Gacha draw
+            this._gacha_draw();
         }
+    }
+
+    _upgrade_draw() {
+        if (this.gold < UPGRADE_DRAW_COST) return;
+        // Check if any upgrades available
+        const available = SHOP_ITEMS.filter(item => this.upgrades[item.id] < item.max_lv);
+        if (available.length === 0) return;
+
+        this.gold -= UPGRADE_DRAW_COST;
+
+        // Pick 2 random different upgrades (or 1 if only 1 available)
+        const shuffled = [...available].sort(() => Math.random() - 0.5);
+        const picks = shuffled.slice(0, Math.min(2, shuffled.length));
+
+        this.upgrade_choices = picks;
+        this.upgrade_pick = 0;
+        sndBuy();
+    }
+
+    _upgrade_pick_confirm() {
+        if (!this.upgrade_choices) return;
+        const chosen = this.upgrade_choices[this.upgrade_pick];
+        if (!chosen) return;
+        this.upgrades[chosen.id]++;
+        this._apply_upgrades();
+        this.upgrade_choices = null;
+    }
+
+    _consumable_draw() {
+        if (this.gold < CONSUMABLE_DRAW_COST) return;
+        if (this.consumable_inv.length >= this.consumable_max) return;
+        this.gold -= CONSUMABLE_DRAW_COST;
+
+        // Weighted random pick
+        const total_w = CONSUMABLES.reduce((s, c) => s + c.weight, 0);
+        let roll = randUniform(0, total_w);
+        let chosen = CONSUMABLES[0];
+        for (const c of CONSUMABLES) {
+            roll -= c.weight;
+            if (roll <= 0) { chosen = c; break; }
+        }
+
+        this.consumable_inv.push(chosen.id);
+        this.consumable_draw_result = chosen;
+        this.consumable_draw_timer = 120; // 2 seconds
+        sndBuy();
+    }
+
+    _use_consumable(slot) {
+        if (this.state !== 'play') return;
+        if (slot < 0 || slot >= this.consumable_inv.length) return;
+        const cid = this.consumable_inv[slot];
+        const cons = CONSUMABLES.find(c => c.id === cid);
+        if (!cons) return;
+
+        // Remove from inventory
+        this.consumable_inv.splice(slot, 1);
+
+        // Apply effect
+        if (cid === 'deep_sea') {
+            this.deep_sea_timer = 600; // 10s
+            this._spawn_fx(WIDTH/2, HEIGHT/2, [60,180,255], 20, 5, 40, 4);
+        } else if (cid === 'shield') {
+            this.shield_count++;
+            this._spawn_fx(WIDTH/2, HEIGHT/2, [100,255,200], 15, 4, 30, 3);
+        } else if (cid === 'slow_time') {
+            this.slow_time_timer = 480; // 8s
+            this._spawn_fx(WIDTH/2, HEIGHT/2, [180,140,255], 15, 4, 30, 3);
+        } else if (cid === 'combo_master') {
+            this.combo_master = true;
+            this._spawn_fx(WIDTH/2, HEIGHT/2, [255,160,60], 15, 4, 30, 3);
+        } else if (cid === 'temp_life') {
+            this.lives++;
+            this._spawn_fx(WIDTH/2, HEIGHT/2, [255,100,120], 15, 4, 30, 3);
+        }
+
+        // Show popup
+        this.popups.push(new ScorePopup(WIDTH/2, HEIGHT/2 - 30, `${cons.icon} ${cons.name}`, cons.color));
+        sndBuy();
     }
 
     _gacha_draw() {
@@ -1253,6 +1413,7 @@ class PinballGame {
         if (this.state === 'shop') {
             if (this._stateChangeCooldown > 0) this._stateChangeCooldown--;
             if (this.gacha_result_timer > 0) this.gacha_result_timer--;
+            if (this.consumable_draw_timer > 0) this.consumable_draw_timer--;
             // Next round hold logic
             if (this._nextRoundHolding) {
                 this._nextRoundHold++;
@@ -1268,7 +1429,12 @@ class PinballGame {
             return;
         }
         if (this.state !== 'play') return;
+        if (this.consumable_open) return; // paused while consumable menu is open
         this.t++;
+
+        // Consumable timers countdown
+        if (this.deep_sea_timer > 0) this.deep_sea_timer--;
+        if (this.slow_time_timer > 0) this.slow_time_timer--;
 
         if (this.tilt_lock && this.t % 300 === 0) {
             this.tilt_lock = false;
@@ -1291,7 +1457,8 @@ class PinballGame {
 
         const tilt = this.tilt_lock ? 0 : this.tilt_x;
         const bt_eff = (this.current_ball_type || {}).effects || {};
-        const ball_grav = this.gravity_val * (bt_eff.gravity_mult || 1.0);
+        const slow_mult = this.slow_time_timer > 0 ? 0.5 : 1.0;
+        const ball_grav = this.gravity_val * (bt_eff.gravity_mult || 1.0) * slow_mult;
 
         const drained = [];
         const split_spawns = [];
@@ -1407,15 +1574,30 @@ class PinballGame {
 
         this.balls = this.balls.filter(b => b.active);
         if (drained.length > 0 && this.balls.length === 0) {
+            // Shield: prevent drain once
+            if (this.shield_count > 0) {
+                this.shield_count--;
+                this._spawn_plunger();
+                this._spawn_fx(WIDTH/2, HEIGHT - 40, [100,255,200], 20, 4, 30, 4);
+                this.popups.push(new ScorePopup(WIDTH/2, HEIGHT - 60, '🛡️ 방어막!', [100,255,200]));
+                // skip life loss
+            } else {
             this.lives--;
             sndDrain();
             if (this.lives <= 0) {
                 this.state = 'gameover';
-                if (!this._testMode && this.score > this.high_score) this.high_score = this.score;
-                if (!this._testMode && this.round_num > this.best_round) this.best_round = this.round_num;
+                if (!this._testMode && this.score > this.high_score) {
+                    this.high_score = this.score;
+                    localStorage.setItem('pinball_high_score', this.high_score);
+                }
+                if (!this._testMode && this.round_num > this.best_round) {
+                    this.best_round = this.round_num;
+                    localStorage.setItem('pinball_best_round', this.best_round);
+                }
             } else {
                 this._spawn_plunger();
             }
+            } // end shield else
         }
 
         if (this.bonus.active) {
@@ -1526,6 +1708,141 @@ class PinballGame {
             fillText(`x${t_mult.toFixed(1)}`, WIDTH-10, b_y+15, BALATRO_ORANGE, '14px "Malgun Gothic", sans-serif', 'right');
         }
 
+        // Consumable box button (top area)
+        if (this.consumable_inv.length > 0) {
+            const boxW = 80, boxH = 28, boxX = WIDTH/2 - boxW/2, boxY = 40;
+            ctx.fillStyle = 'rgba(40,60,100,0.6)';
+            ctx.strokeStyle = 'rgba(100,150,220,0.5)';
+            ctx.lineWidth = 1;
+            roundRect(boxX, boxY, boxW, boxH, 6);
+            ctx.fill(); ctx.stroke();
+
+            // Mini icons
+            const iconStartX = boxX + 6;
+            for (let i = 0; i < Math.min(this.consumable_inv.length, 5); i++) {
+                const cid = this.consumable_inv[i];
+                const cons = CONSUMABLES.find(c => c.id === cid);
+                if (cons) fillText(cons.icon, iconStartX + i * 14, boxY + 18, WHITE, '11px "Malgun Gothic", sans-serif', 'left');
+            }
+            fillText(this._isMobile ? '▼' : 'Q', boxX + boxW - 14, boxY + 18, [180,200,230], '11px "Malgun Gothic", sans-serif', 'center');
+        }
+
+        // Consumable pause menu overlay
+        if (this.consumable_open) {
+            // Dim background
+            ctx.fillStyle = 'rgba(0,0,20,0.75)';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            fillText("소모품 박스", WIDTH/2, 140, WHITE, 'bold 28px "Malgun Gothic", sans-serif', 'center');
+            fillText("사용할 소모품을 선택하세요", WIDTH/2, 168, [150,170,210], '14px "Malgun Gothic", sans-serif', 'center');
+
+            const cardW = 80, cardH = 120, cardGap = 10;
+            const invLen = this.consumable_inv.length;
+            const totalW = invLen * (cardW + cardGap) - cardGap;
+            const startX = WIDTH/2 - totalW/2;
+            const cardY = 210;
+
+            for (let i = 0; i < invLen; i++) {
+                const cid = this.consumable_inv[i];
+                const cons = CONSUMABLES.find(c => c.id === cid);
+                if (!cons) continue;
+                const cx = startX + i * (cardW + cardGap);
+                const selected = (i === this.consumable_cursor);
+
+                // Card
+                const glow = selected ? 0.5 : 0.15;
+                ctx.fillStyle = `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},${glow})`;
+                ctx.strokeStyle = selected
+                    ? `rgba(${Math.min(255,cons.color[0]+80)},${Math.min(255,cons.color[1]+80)},${Math.min(255,cons.color[2]+80)},1)`
+                    : `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},0.5)`;
+                ctx.lineWidth = selected ? 3 : 1;
+                roundRect(cx, cardY, cardW, cardH, 10);
+                ctx.fill(); ctx.stroke();
+
+                // Selected glow
+                if (selected) {
+                    ctx.shadowColor = `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},0.6)`;
+                    ctx.shadowBlur = 15;
+                    roundRect(cx, cardY, cardW, cardH, 10);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+
+                // Icon large
+                fillText(cons.icon, cx + cardW/2, cardY + 40, WHITE, '30px "Malgun Gothic", sans-serif', 'center');
+                // Name
+                fillText(cons.name, cx + cardW/2, cardY + 70, selected ? WHITE : [200,200,220], 'bold 12px "Malgun Gothic", sans-serif', 'center');
+                // Desc
+                fillText(cons.desc, cx + cardW/2, cardY + 88, selected ? [220,220,240] : [140,160,190], '10px "Malgun Gothic", sans-serif', 'center');
+
+                // Selection indicator
+                if (selected) {
+                    fillText("▲", cx + cardW/2, cardY - 8, cons.color, 'bold 16px sans-serif', 'center');
+                }
+            }
+
+            // Empty slots
+            for (let i = invLen; i < this.consumable_max; i++) {
+                const cx = startX + i * (cardW + cardGap);
+                ctx.fillStyle = 'rgba(30,40,60,0.3)';
+                ctx.strokeStyle = 'rgba(60,70,90,0.3)';
+                ctx.lineWidth = 1;
+                roundRect(cx, cardY, cardW, cardH, 10);
+                ctx.fill(); ctx.stroke();
+            }
+
+            // Bottom hint
+            const sel_cons = this.consumable_inv.length > 0 ? CONSUMABLES.find(c => c.id === this.consumable_inv[this.consumable_cursor]) : null;
+            if (sel_cons) {
+                fillText(`[ Space ] ${sel_cons.name} 사용`, WIDTH/2, 380, sel_cons.color, 'bold 16px "Malgun Gothic", sans-serif', 'center');
+            }
+
+            if (this._isMobile) {
+                // Close button
+                const clX = WIDTH/2 - 60, clY = 430, clW = 120, clH = 40;
+                ctx.fillStyle = 'rgba(80,40,40,0.7)';
+                ctx.strokeStyle = 'rgba(180,80,80,0.6)';
+                ctx.lineWidth = 1;
+                roundRect(clX, clY, clW, clH, 8);
+                ctx.fill(); ctx.stroke();
+                fillText("닫기", WIDTH/2, clY + clH/2 + 6, WHITE, 'bold 16px "Malgun Gothic", sans-serif', 'center');
+            } else {
+                fillText("[ ←→ ] 선택   [ Space ] 사용   [ Q / ESC ] 닫기", WIDTH/2, 420, [120,140,180], '13px "Malgun Gothic", sans-serif', 'center');
+            }
+
+            fillText("⏸ 일시정지", WIDTH/2, 110, [200,200,100], '14px "Malgun Gothic", sans-serif', 'center');
+        }
+
+        // Active consumable effects overlay
+        if (this.deep_sea_timer > 0) {
+            const sec = Math.ceil(this.deep_sea_timer / 60);
+            const alpha = Math.min(1, 0.15 + Math.sin(this.t * 0.05) * 0.05);
+            ctx.fillStyle = `rgba(0,80,200,${alpha.toFixed(2)})`;
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+            fillText(`🌊 심해 x3 (${sec}s)`, WIDTH/2, 55, [100,200,255], 'bold 14px "Malgun Gothic", sans-serif', 'center');
+        }
+        if (this.slow_time_timer > 0) {
+            const sec = Math.ceil(this.slow_time_timer / 60);
+            const alpha = Math.min(1, 0.08 + Math.sin(this.t * 0.03) * 0.03);
+            ctx.fillStyle = `rgba(100,60,200,${alpha.toFixed(2)})`;
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+            const yOff = this.deep_sea_timer > 0 ? 72 : 55;
+            fillText(`🐌 슬로우 (${sec}s)`, WIDTH/2, yOff, [180,150,255], 'bold 14px "Malgun Gothic", sans-serif', 'center');
+        }
+
+        // Status icons on right side
+        {
+            let iy = 55;
+            if (this.shield_count > 0) {
+                fillText(`🛡️x${this.shield_count}`, WIDTH - 10, iy, [100,255,200], '13px "Malgun Gothic", sans-serif', 'right');
+                iy += 18;
+            }
+            if (this.combo_master) {
+                fillText('🔥콤보+', WIDTH - 10, iy, [255,160,60], '13px "Malgun Gothic", sans-serif', 'right');
+                iy += 18;
+            }
+        }
+
         // Overlay warnings
         if (this.multiball) {
             fillText("MULTIBALL!", WIDTH/2, 105, BALATRO_BLUE, '20px "Malgun Gothic", sans-serif', 'center');
@@ -1575,19 +1892,7 @@ class PinballGame {
         if (this.high_score > 0) fillText(`최고 점수: ${this.high_score.toLocaleString()}`, WIDTH/2, 660, GOLD_C, '14px "Malgun Gothic", sans-serif', 'center');
         if (this.best_round > 0) fillText(`최고 라운드: ${this.best_round}`, WIDTH/2, 680, GOLD_C, '14px "Malgun Gothic", sans-serif', 'center');
 
-        // Test mode hint
-        if (!this._isMobile) {
-            fillText("[ T ] 테스트 모드", WIDTH/2, 720, [120,120,150], '12px "Malgun Gothic", sans-serif', 'center');
-        } else {
-            // Mobile: small "TEST" button in top-right corner
-            const bx = WIDTH - 70, by = 15, bw = 60, bh = 30;
-            ctx.fillStyle = 'rgba(60,60,90,0.7)';
-            ctx.strokeStyle = 'rgba(150,150,200,0.5)';
-            ctx.lineWidth = 1;
-            roundRect(bx, by, bw, bh, 6);
-            ctx.fill(); ctx.stroke();
-            fillText("TEST", bx + bw/2, by + bh/2 + 5, [180,180,220], '13px "Malgun Gothic", sans-serif', 'center');
-        }
+        // Test mode: T key only (hidden)
     }
 
     _draw_test_setup() {
@@ -1712,41 +2017,203 @@ class PinballGame {
             ctx.fillStyle = rgb(c);
             ctx.beginPath(); ctx.moveTo(0, 0);
             for (let x=0; x<=WIDTH; x+=5) {
-                const y = 55 + i*3 + Math.sin(x*0.02+this.t*0.03+i)*4;
-                ctx.lineTo(x, y);
+                const yy = 55 + i*3 + Math.sin(x*0.02+this.t*0.03+i)*4;
+                ctx.lineTo(x, yy);
             }
             ctx.lineTo(WIDTH, 0); ctx.closePath(); ctx.fill();
         }
 
-        fillText("상    점", WIDTH/2, 45, WHITE, '42px "Malgun Gothic", sans-serif', 'center');
+        fillText("상    점", WIDTH/2, 38, WHITE, '32px "Malgun Gothic", sans-serif', 'center');
 
         const next_target = this._get_round_target(this.round_num+1);
-        fillText(`라운드 ${this.round_num} 클리어!   |   다음 목표: ${next_target.toLocaleString()}`, WIDTH/2, 72, SKY_SEA, '14px "Malgun Gothic", sans-serif', 'center');
+        fillText(`R${this.round_num} 클리어  |  다음 목표: ${next_target.toLocaleString()}`, WIDTH/2, 60, SKY_SEA, '13px "Malgun Gothic", sans-serif', 'center');
 
-        fillText(`골드: ${this.gold}`, 50, 97, GOLD_C, '20px "Malgun Gothic", sans-serif', 'left');
-        fillText(`생명: ${this.lives}`, WIDTH-50, 97, PEARL, '14px "Malgun Gothic", sans-serif', 'right');
+        fillText(`💰 ${this.gold}G`, 40, 82, GOLD_C, 'bold 18px "Malgun Gothic", sans-serif', 'left');
+        fillText(`❤️ ${this.lives}`, WIDTH-40, 82, PEARL, '14px "Malgun Gothic", sans-serif', 'right');
 
-        // Upgrade items
-        const start_y = 108;
-        const item_h = 72;
-        for (let i=0; i<SHOP_ITEMS.length; i++) {
-            const item = SHOP_ITEMS[i];
-            const y = start_y + i*item_h;
-            const lv = this.upgrades[item.id];
-            const is_max = lv >= item.max_lv;
-            const can_buy = !is_max && this.gold >= item.costs[lv];
-            const selected = (i === this.shop_cursor);
+        // === TAB BAR ===
+        const tabNames = ['강화 뽑기', '소모품 뽑기', '공 뽑기'];
+        const tabY = 95;
+        const tabH = 28;
+        const tabW = (WIDTH - 40) / 3;
+        for (let ti = 0; ti < 3; ti++) {
+            const tx = 20 + ti * tabW;
+            const isActive = (this.shop_tab === ti);
+            ctx.fillStyle = isActive ? 'rgba(80,140,255,0.35)' : 'rgba(30,40,60,0.6)';
+            ctx.strokeStyle = isActive ? 'rgba(120,180,255,0.9)' : 'rgba(60,80,120,0.4)';
+            ctx.lineWidth = isActive ? 2 : 1;
+            roundRect(tx, tabY, tabW - 4, tabH, 6);
+            ctx.fill(); ctx.stroke();
+            fillText(tabNames[ti], tx + (tabW-4)/2, tabY + tabH/2 + 5, isActive ? WHITE : [140,150,180], `${isActive?'bold ':''}14px "Malgun Gothic", sans-serif`, 'center');
+        }
 
-            let bg_c, border_c;
-            if (selected) { bg_c = SHOP_HIGHLIGHT; border_c = [100,180,255]; }
-            else if (is_max) { bg_c = [25,55,40]; border_c = [60,120,60]; }
-            else { bg_c = SHOP_PANEL; border_c = [40,70,120]; }
+        const content_y = tabY + tabH + 10;
 
-            fillRoundRect(30, y, WIDTH-60, item_h-6, 6, bg_c);
-            strokeRoundRect(30, y, WIDTH-60, item_h-6, 6, border_c, 2);
+        // === TAB 0: UPGRADE DRAW ===
+        if (this.shop_tab === 0) {
+            // Show current upgrade levels summary
+            const summY = content_y + 2;
+            fillText('보유 강화', WIDTH/2, summY, [140,170,210], '13px "Malgun Gothic", sans-serif', 'center');
+            const rowH = 20;
+            for (let i = 0; i < SHOP_ITEMS.length; i++) {
+                const item = SHOP_ITEMS[i];
+                const lv = this.upgrades[item.id];
+                const iy = summY + 12 + i * rowH;
+                fillText(`${item.icon} ${item.name}`, 44, iy, WHITE, '13px "Malgun Gothic", sans-serif', 'left');
+                // Level dots
+                for (let l = 0; l < item.max_lv; l++) {
+                    const lx2 = WIDTH - 60 + l * 14;
+                    if (l < lv) fillCircle(lx2, iy - 4, 4, GOLD_C);
+                    else { fillCircle(lx2, iy - 4, 4, [50,60,80]); strokeCircle(lx2, iy - 4, 4, [80,100,140], 1); }
+                }
+            }
 
-            if (selected) {
-                const ax = 14, ay = y + (item_h-6)/2;
+            // Draw button
+            const btnY = summY + 12 + SHOP_ITEMS.length * rowH + 16;
+            const allMaxed = SHOP_ITEMS.every(item => this.upgrades[item.id] >= item.max_lv);
+            const canDraw = !allMaxed && this.gold >= UPGRADE_DRAW_COST;
+            const btnBg = allMaxed ? [25,55,40] : (canDraw ? [40,70,140] : SHOP_PANEL);
+            const btnBorder = allMaxed ? [60,120,60] : (canDraw ? [80,140,255] : [60,80,120]);
+
+            fillRoundRect(40, btnY, WIDTH-80, 48, 10, btnBg);
+            strokeRoundRect(40, btnY, WIDTH-80, 48, 10, btnBorder, 2);
+            if (allMaxed) {
+                fillText('🎉 모든 강화 완료!', WIDTH/2, btnY+28, [100,220,100], 'bold 18px "Malgun Gothic", sans-serif', 'center');
+            } else {
+                fillText(`🎲 강화 뽑기  (${UPGRADE_DRAW_COST}G)`, WIDTH/2, btnY+22, canDraw ? WHITE : [120,120,140], 'bold 18px "Malgun Gothic", sans-serif', 'center');
+                fillText('2개 중 1개 선택', WIDTH/2, btnY+40, [140,160,200], '11px "Malgun Gothic", sans-serif', 'center');
+            }
+
+            // Available upgrades list
+            const listY = btnY + 64;
+            fillText('등장 가능한 강화', WIDTH/2, listY, [100,130,170], '12px "Malgun Gothic", sans-serif', 'center');
+            let ly = listY + 16;
+            for (const item of SHOP_ITEMS) {
+                const lv = this.upgrades[item.id];
+                if (lv >= item.max_lv) {
+                    fillText(`${item.icon} ${item.name}  ✅ MAX`, WIDTH/2, ly, [60,120,60], '12px "Malgun Gothic", sans-serif', 'center');
+                } else {
+                    fillText(`${item.icon} ${item.name}  (Lv.${lv}) — ${item.desc}`, WIDTH/2, ly, [130,150,180], '12px "Malgun Gothic", sans-serif', 'center');
+                }
+                ly += 18;
+            }
+
+            // === UPGRADE CHOICE OVERLAY ===
+            if (this.upgrade_choices) {
+                // Dark overlay
+                ctx.fillStyle = 'rgba(0,0,0,0.75)';
+                ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+                fillText('강화를 선택하세요!', WIDTH/2, 100, GOLD_C, 'bold 22px "Malgun Gothic", sans-serif', 'center');
+
+                const cardW = 150, cardH = 200, gap = 20;
+                const totalW = this.upgrade_choices.length * cardW + (this.upgrade_choices.length - 1) * gap;
+                const startX = WIDTH/2 - totalW/2;
+
+                for (let ci = 0; ci < this.upgrade_choices.length; ci++) {
+                    const ch = this.upgrade_choices[ci];
+                    const cx = startX + ci * (cardW + gap);
+                    const cy = 130;
+                    const isPick = (ci === this.upgrade_pick);
+                    const lv = this.upgrades[ch.id];
+                    const newLv = lv + 1;
+
+                    // Card bg
+                    const cbg = isPick ? [50,80,160] : [30,40,65];
+                    const cborder = isPick ? [120,180,255] : [60,80,120];
+                    fillRoundRect(cx, cy, cardW, cardH, 12, cbg);
+                    strokeRoundRect(cx, cy, cardW, cardH, 12, cborder, isPick ? 3 : 1);
+
+                    // Glow for selected
+                    if (isPick) {
+                        ctx.save();
+                        ctx.shadowColor = 'rgba(100,180,255,0.6)';
+                        ctx.shadowBlur = 20;
+                        fillRoundRect(cx, cy, cardW, cardH, 12, cbg);
+                        ctx.restore();
+                    }
+
+                    // Icon
+                    fillText(ch.icon, cx + cardW/2, cy + 50, WHITE, '40px "Malgun Gothic", sans-serif', 'center');
+                    // Name
+                    fillText(ch.name, cx + cardW/2, cy + 80, WHITE, 'bold 16px "Malgun Gothic", sans-serif', 'center');
+                    // Level change
+                    fillText(`Lv.${lv} → Lv.${newLv}`, cx + cardW/2, cy + 105, GOLD_C, 'bold 14px "Malgun Gothic", sans-serif', 'center');
+                    // Description
+                    fillText(ch.desc, cx + cardW/2, cy + 130, [180,200,230], '12px "Malgun Gothic", sans-serif', 'center');
+
+                    // Level dots
+                    const dotStartX = cx + cardW/2 - (ch.max_lv * 14)/2;
+                    for (let l = 0; l < ch.max_lv; l++) {
+                        const dx = dotStartX + l * 14 + 7;
+                        const dy = cy + 155;
+                        if (l < newLv) fillCircle(dx, dy, 5, GOLD_C);
+                        else { fillCircle(dx, dy, 5, [50,60,80]); strokeCircle(dx, dy, 5, [80,100,140], 1); }
+                    }
+
+                    // Selection indicator
+                    if (isPick) {
+                        fillText('▲', cx + cardW/2, cy + cardH + 16, GOLD_C, 'bold 16px "Malgun Gothic", sans-serif', 'center');
+                    }
+                }
+
+                // Hints
+                const isMobile = ('ontouchstart' in window);
+                if (!isMobile) {
+                    fillText('← → 선택  |  Space 확정  |  Esc 취소', WIDTH/2, 360, [120,140,170], '12px "Malgun Gothic", sans-serif', 'center');
+                } else {
+                    fillText('카드를 터치하여 선택', WIDTH/2, 360, [120,140,170], '14px "Malgun Gothic", sans-serif', 'center');
+                }
+            }
+        }
+
+        // === TAB 1: CONSUMABLE DRAW ===
+        else if (this.shop_tab === 1) {
+            // Inventory display
+            fillText(`소모품 박스: ${this.consumable_inv.length}/${this.consumable_max}`, WIDTH/2, content_y + 6, this.consumable_inv.length >= this.consumable_max ? [255,100,100] : [140,170,210], '13px "Malgun Gothic", sans-serif', 'center');
+
+            // Current inventory cards
+            const invY = content_y + 20;
+            const invCardW = 100, invCardH = 70, invGap = 12;
+            const invTotalW = this.consumable_max * (invCardW + invGap) - invGap;
+            const invStartX = WIDTH/2 - invTotalW/2;
+            for (let i = 0; i < this.consumable_max; i++) {
+                const ix = invStartX + i * (invCardW + invGap);
+                if (i < this.consumable_inv.length) {
+                    const cons = CONSUMABLES.find(c => c.id === this.consumable_inv[i]);
+                    if (cons) {
+                        ctx.fillStyle = `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},0.25)`;
+                        ctx.strokeStyle = `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},0.7)`;
+                        ctx.lineWidth = 2;
+                        roundRect(ix, invY, invCardW, invCardH, 8);
+                        ctx.fill(); ctx.stroke();
+                        fillText(cons.icon, ix + invCardW/2, invY + 30, WHITE, '22px "Malgun Gothic", sans-serif', 'center');
+                        fillText(cons.name, ix + invCardW/2, invY + 55, WHITE, '12px "Malgun Gothic", sans-serif', 'center');
+                    }
+                } else {
+                    ctx.fillStyle = 'rgba(30,40,60,0.3)';
+                    ctx.strokeStyle = 'rgba(60,70,90,0.3)';
+                    ctx.lineWidth = 1;
+                    roundRect(ix, invY, invCardW, invCardH, 8);
+                    ctx.fill(); ctx.stroke();
+                    fillText("빈 칸", ix + invCardW/2, invY + 40, [80,90,110], '12px "Malgun Gothic", sans-serif', 'center');
+                }
+            }
+
+            // Draw button
+            const drawY = invY + invCardH + 24;
+            const drawH = 60;
+            const canDraw = this.gold >= CONSUMABLE_DRAW_COST && this.consumable_inv.length < this.consumable_max;
+            const drawSel = (this.shop_cursor === 0);
+
+            let dbg, dbd;
+            if (drawSel) { dbg = SHOP_HIGHLIGHT; dbd = [100,180,255]; }
+            else { dbg = [30,40,70]; dbd = [50,80,140]; }
+            fillRoundRect(24, drawY, WIDTH-48, drawH, 8, dbg);
+            strokeRoundRect(24, drawY, WIDTH-48, drawH, 8, dbd, 2);
+
+            if (drawSel) {
+                const ax = 10, ay = drawY + drawH/2;
                 const pulse = Math.sin(this.t*0.1)*3;
                 ctx.fillStyle = rgb(GOLD_C);
                 ctx.beginPath();
@@ -1754,89 +2221,106 @@ class PinballGame {
                 ctx.closePath(); ctx.fill();
             }
 
-            let main_txt_col, sub_txt_col, cost_col;
-            if (selected) {
-                main_txt_col = [20,20,30]; sub_txt_col = [50,50,60];
-                cost_col = can_buy ? [20,20,30] : [150,50,50];
+            const dtc = drawSel ? [20,20,30] : WHITE;
+            const dcc = drawSel ? (canDraw ? [20,20,30] : [150,50,50]) : (canDraw ? GOLD_C : [120,80,80]);
+            fillText("🎲 소모품 뽑기", 44, drawY + 24, dtc, 'bold 20px "Malgun Gothic", sans-serif', 'left');
+            fillText("랜덤 소모품 1개를 뽑습니다", 44, drawY + 46, drawSel ? [50,50,60] : [130,160,200], '13px "Malgun Gothic", sans-serif', 'left');
+            fillText(`${CONSUMABLE_DRAW_COST}G`, WIDTH-68, drawY + 24, dcc, 'bold 20px "Malgun Gothic", sans-serif', 'right');
+
+            if (this.consumable_inv.length >= this.consumable_max) {
+                fillText("⚠ 박스가 가득 찼습니다!", WIDTH/2, drawY + drawH + 24, [255,100,100], '14px "Malgun Gothic", sans-serif', 'center');
+            }
+
+            // Consumable types reference
+            const refY = drawY + drawH + 50;
+            fillText("뽑을 수 있는 소모품", 44, refY, [140,170,210], '13px "Malgun Gothic", sans-serif', 'left');
+            for (let ci = 0; ci < CONSUMABLES.length; ci++) {
+                const cons = CONSUMABLES[ci];
+                const ry = refY + 20 + ci * 28;
+                fillText(cons.icon, 50, ry + 10, WHITE, '16px "Malgun Gothic", sans-serif', 'left');
+                fillText(cons.name, 72, ry + 10, WHITE, '13px "Malgun Gothic", sans-serif', 'left');
+                fillText(cons.desc, 170, ry + 10, [130,160,200], '12px "Malgun Gothic", sans-serif', 'left');
+            }
+
+            // Draw result popup
+            if (this.consumable_draw_timer > 0 && this.consumable_draw_result) {
+                const fade = Math.min(1, this.consumable_draw_timer / 20);
+                ctx.fillStyle = `rgba(0,0,30,${(0.7*fade).toFixed(2)})`;
+                ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+                const cr = this.consumable_draw_result;
+                const popY = HEIGHT/2 - 60;
+
+                // Glow
+                ctx.fillStyle = `rgba(${cr.color[0]},${cr.color[1]},${cr.color[2]},${(0.2*fade).toFixed(2)})`;
+                ctx.beginPath(); ctx.arc(WIDTH/2, popY, 80, 0, Math.PI*2); ctx.fill();
+
+                fillText(cr.icon, WIDTH/2, popY, WHITE, '48px "Malgun Gothic", sans-serif', 'center');
+                fillText(cr.name, WIDTH/2, popY + 45, cr.color, 'bold 24px "Malgun Gothic", sans-serif', 'center');
+                fillText(cr.desc, WIDTH/2, popY + 72, [180,200,230], '14px "Malgun Gothic", sans-serif', 'center');
+                fillText("소모품 박스에 추가되었습니다!", WIDTH/2, popY + 100, [150,170,210], '13px "Malgun Gothic", sans-serif', 'center');
+            }
+        }
+
+        // === TAB 2: GACHA ===
+        else if (this.shop_tab === 2) {
+            const gacha_sel = (this.shop_cursor === 0);
+            const can_gacha = this.gold >= GACHA_COST;
+
+            // Draw button
+            const btnY = content_y;
+            const btnH = 60;
+            let gbg, gbd;
+            if (gacha_sel) { gbg = SHOP_HIGHLIGHT; gbd = [100,180,255]; }
+            else { gbg = [30,40,70]; gbd = [50,80,140]; }
+            fillRoundRect(24, btnY, WIDTH-48, btnH, 8, gbg);
+            strokeRoundRect(24, btnY, WIDTH-48, btnH, 8, gbd, 2);
+
+            const g_txt_col = gacha_sel ? [20,20,30] : WHITE;
+            const g_cost_col = gacha_sel ? [20,20,30] : (can_gacha ? GOLD_C : [120,80,80]);
+            fillText("🎰 공 뽑기", 44, btnY+24, g_txt_col, 'bold 20px "Malgun Gothic", sans-serif', 'left');
+            fillText("랜덤 공을 뽑습니다 (일반/희귀/전설)", 44, btnY+46, gacha_sel ? [50,50,60] : [130,160,200], '13px "Malgun Gothic", sans-serif', 'left');
+            fillText(`${GACHA_COST}G`, WIDTH-68, btnY+24, g_cost_col, 'bold 20px "Malgun Gothic", sans-serif', 'right');
+
+            // Current ball display
+            const ballBoxY = btnY + btnH + 16;
+            fillRoundRect(24, ballBoxY, WIDTH-48, 100, 8, [20,30,50]);
+            strokeRoundRect(24, ballBoxY, WIDTH-48, 100, 8, [40,60,100], 1);
+            fillText("현재 공", 44, ballBoxY+20, [140,170,210], '13px "Malgun Gothic", sans-serif', 'left');
+
+            const cbt = this.current_ball_type;
+            if (cbt) {
+                fillCircle(60, ballBoxY+55, 16, cbt.color);
+                fillCircle(56, ballBoxY+51, 5, WHITE);
+                strokeCircle(60, ballBoxY+55, 16, lerp_col(cbt.color, BLACK, 0.3), 2);
+                const rc = RARITY_COLORS[cbt.rarity];
+                fillText(`[${cbt.rarity_name}] ${cbt.name}`, 84, ballBoxY+50, rc, 'bold 16px "Malgun Gothic", sans-serif', 'left');
+                fillText(cbt.desc, 84, ballBoxY+72, [150,180,220], '13px "Malgun Gothic", sans-serif', 'left');
             } else {
-                main_txt_col = (can_buy || is_max) ? WHITE : [140,140,160];
-                sub_txt_col = [150,180,220];
-                cost_col = can_buy ? GOLD_C : [120,80,80];
+                fillCircle(60, ballBoxY+55, 16, PEARL);
+                fillCircle(56, ballBoxY+51, 5, WHITE);
+                fillText("기본 공 장착 중", 84, ballBoxY+50, [180,200,220], '16px "Malgun Gothic", sans-serif', 'left');
+                fillText("골드로 새 공을 뽑아보세요!", 84, ballBoxY+72, [130,160,200], '13px "Malgun Gothic", sans-serif', 'left');
             }
 
-            fillText(item.name, 50, y+20, main_txt_col, '20px "Malgun Gothic", sans-serif', 'left');
-
-            // Level dots
-            for (let l=0; l<item.max_lv; l++) {
-                const lx2 = 56+l*22, ly2 = y+34;
-                if (l < lv) {
-                    fillCircle(lx2, ly2, 4, selected ? [200,140,0] : GOLD_C);
-                } else {
-                    fillCircle(lx2, ly2, 4, selected ? [150,150,160] : [50,60,80]);
-                    strokeCircle(lx2, ly2, 4, sub_txt_col, 1);
-                }
-            }
-
-            fillText(item.desc, 50, y+58, sub_txt_col, '14px "Malgun Gothic", sans-serif', 'left');
-
-            if (is_max) {
-                fillText("MAX", WIDTH-80, y+20, selected ? [20,100,20] : SHOP_MAX_C, '20px "Malgun Gothic", sans-serif', 'right');
-            } else {
-                const cost = item.costs[lv];
-                fillText(`${cost}G`, WIDTH-80, y+20, cost_col, '20px "Malgun Gothic", sans-serif', 'right');
+            // Ball types reference
+            const refY = ballBoxY + 116;
+            fillText("공 종류 안내", 44, refY, [140,170,210], '13px "Malgun Gothic", sans-serif', 'left');
+            const BALL_TYPES_REF = typeof BALL_TYPES !== 'undefined' ? BALL_TYPES : [];
+            for (let bi = 0; bi < BALL_TYPES_REF.length && bi < 9; bi++) {
+                const bt = BALL_TYPES_REF[bi];
+                const bx = 40 + (bi % 2) * (WIDTH/2 - 30);
+                const by = refY + 12 + Math.floor(bi/2) * 28;
+                fillCircle(bx, by+6, 6, bt.color);
+                fillCircle(bx-1, by+5, 2, WHITE);
+                const rc = RARITY_COLORS[bt.rarity];
+                fillText(`${bt.name}`, bx+14, by+10, rc, '12px "Malgun Gothic", sans-serif', 'left');
             }
         }
 
-        // Gacha section
-        const gacha_y = start_y + SHOP_ITEMS.length * item_h + 6;
-        const gacha_h = 108;
-        const gacha_sel = (this.shop_cursor === SHOP_ITEMS.length);
-        const can_gacha = this.gold >= GACHA_COST;
-
-        let gbg, gbd;
-        if (gacha_sel) { gbg = SHOP_HIGHLIGHT; gbd = [100,180,255]; }
-        else { gbg = [30,40,70]; gbd = [50,80,140]; }
-
-        fillRoundRect(30, gacha_y, WIDTH-60, gacha_h, 8, gbg);
-        strokeRoundRect(30, gacha_y, WIDTH-60, gacha_h, 8, gbd, 2);
-
-        if (gacha_sel) {
-            const ax = 14, ay = gacha_y + gacha_h/2;
-            const pulse = Math.sin(this.t*0.1)*3;
-            ctx.fillStyle = rgb(GOLD_C);
-            ctx.beginPath();
-            ctx.moveTo(ax+pulse, ay); ctx.lineTo(ax-6+pulse, ay-6); ctx.lineTo(ax-6+pulse, ay+6);
-            ctx.closePath(); ctx.fill();
-        }
-
-        const g_txt_col = gacha_sel ? [20,20,30] : WHITE;
-        const g_cost_col = gacha_sel ? [20,20,30] : (can_gacha ? GOLD_C : [120,80,80]);
-
-        fillText("공 뽑기", 50, gacha_y+22, g_txt_col, '20px "Malgun Gothic", sans-serif', 'left');
-        fillText(`${GACHA_COST}G`, WIDTH-80, gacha_y+22, g_cost_col, '20px "Malgun Gothic", sans-serif', 'right');
-
-        // Current ball
-        const cbt = this.current_ball_type;
-        const ball_y = gacha_y + 38;
-        if (cbt) {
-            fillCircle(65, ball_y+8, 10, cbt.color);
-            fillCircle(63, ball_y+6, 3, WHITE);
-            strokeCircle(65, ball_y+8, 10, lerp_col(cbt.color, BLACK, 0.3), 1);
-            const rc = RARITY_COLORS[cbt.rarity];
-            const rn_col = gacha_sel ? rc.map(c2 => Math.max(0,c2-50)) : rc;
-            fillText(`[${cbt.rarity_name}] ${cbt.name}`, 82, ball_y+12, rn_col, '14px "Malgun Gothic", sans-serif', 'left');
-            fillText(cbt.desc, 82, ball_y+30, gacha_sel ? [50,50,60] : [150,180,220], '14px "Malgun Gothic", sans-serif', 'left');
-        } else {
-            fillCircle(65, ball_y+8, 10, PEARL);
-            fillCircle(63, ball_y+6, 3, WHITE);
-            fillText("기본 공 장착 중", 82, ball_y+12, gacha_sel ? [60,60,80] : [180,200,220], '14px "Malgun Gothic", sans-serif', 'left');
-            fillText("골드로 새 공을 뽑아보세요!", 82, ball_y+30, gacha_sel ? [80,80,100] : [130,160,200], '14px "Malgun Gothic", sans-serif', 'left');
-        }
-
-        fillText("랜덤 공을 뽑습니다 (일반/희귀/전설)", 50, gacha_y+gacha_h-10, gacha_sel ? [80,80,120] : [100,130,170], '14px "Malgun Gothic", sans-serif', 'left');
-
+        // Key hints (non-mobile)
         if (!this._isMobile) {
-            fillText("[ ↑↓ ] 선택   [ Space ] 구매   [ Enter 꾹 ] 다음 라운드", WIDTH/2, HEIGHT-18, [100,130,180], '14px "Malgun Gothic", sans-serif', 'center');
+            fillText("[ ←→ ] 탭  [ Space ] 뽑기  [ Enter 꾹 ] 다음", WIDTH/2, HEIGHT-18, [100,130,180], '13px "Malgun Gothic", sans-serif', 'center');
         }
 
         // Gacha result popup
@@ -1989,44 +2473,31 @@ class PinballGame {
         }
 
         if (this.state === 'shop') {
-            // Shop touch buttons (always shown)
+            // Bottom bar: Buy button + Next round hold button
             const btnH = 50;
-            const btnW = WIDTH * 0.28;
-            // Up
-            fillRoundRect(10, HEIGHT-btnH*2-10, btnW, btnH-5, 8, [40,60,100]);
-            strokeRoundRect(10, HEIGHT-btnH*2-10, btnW, btnH-5, 8, [80,120,180], 2);
-            fillText("▲", 10+btnW/2, HEIGHT-btnH*2+18, WHITE, 'bold 20px sans-serif', 'center');
-            // Down
-            fillRoundRect(10, HEIGHT-btnH-5, btnW, btnH-5, 8, [40,60,100]);
-            strokeRoundRect(10, HEIGHT-btnH-5, btnW, btnH-5, 8, [80,120,180], 2);
-            fillText("▼", 10+btnW/2, HEIGHT-btnH+22, WHITE, 'bold 20px sans-serif', 'center');
-            // Buy
-            fillRoundRect(WIDTH/2-btnW/2, HEIGHT-btnH*2-10, btnW, btnH-5, 8, [60,80,40]);
-            strokeRoundRect(WIDTH/2-btnW/2, HEIGHT-btnH*2-10, btnW, btnH-5, 8, [120,180,80], 2);
-            fillText("구매", WIDTH/2, HEIGHT-btnH*2+18, BALATRO_GOLD, 'bold 18px "Malgun Gothic",sans-serif', 'center');
+            const buyW = WIDTH * 0.45;
+            const nrW2 = WIDTH * 0.45;
+
+            // Buy/Draw button
+            const buyLabel = this.shop_tab === 0 ? "강화 뽑기" : (this.shop_tab === 1 ? "소모품 뽑기" : "공 뽑기");
+            fillRoundRect(10, HEIGHT-btnH-5, buyW, btnH-5, 8, [60,80,40]);
+            strokeRoundRect(10, HEIGHT-btnH-5, buyW, btnH-5, 8, [120,180,80], 2);
+            fillText(buyLabel, 10+buyW/2, HEIGHT-btnH+22, BALATRO_GOLD, 'bold 18px "Malgun Gothic",sans-serif', 'center');
+
             // Next round (hold button with progress)
-            const nrX = WIDTH-btnW-10, nrY = HEIGHT-btnH*2-10, nrW = btnW, nrH = btnH*2-5;
+            const nrX = WIDTH-nrW2-10, nrY = HEIGHT-btnH-5, nrH2 = btnH-5;
             const holdProg = this._nextRoundHold / this._nextRoundRequired;
-            fillRoundRect(nrX, nrY, nrW, nrH, 8, [80,40,40]);
+            fillRoundRect(nrX, nrY, nrW2, nrH2, 8, [80,40,40]);
             if (holdProg > 0) {
-                const fillH2 = Math.round(nrH * holdProg);
+                const fillH2 = Math.round(nrH2 * holdProg);
                 ctx.save();
-                ctx.beginPath();
-                ctx.moveTo(nrX+8, nrY); ctx.lineTo(nrX+nrW-8, nrY);
-                ctx.quadraticCurveTo(nrX+nrW, nrY, nrX+nrW, nrY+8);
-                ctx.lineTo(nrX+nrW, nrY+nrH-8);
-                ctx.quadraticCurveTo(nrX+nrW, nrY+nrH, nrX+nrW-8, nrY+nrH);
-                ctx.lineTo(nrX+8, nrY+nrH);
-                ctx.quadraticCurveTo(nrX, nrY+nrH, nrX, nrY+nrH-8);
-                ctx.lineTo(nrX, nrY+8);
-                ctx.quadraticCurveTo(nrX, nrY, nrX+8, nrY);
+                roundRect(nrX, nrY, nrW2, nrH2, 8);
                 ctx.clip();
-                fillRect(nrX, nrY+nrH-fillH2, nrW, fillH2, [180,80,80]);
+                fillRect(nrX, nrY+nrH2-fillH2, nrW2, fillH2, [180,80,80]);
                 ctx.restore();
             }
-            strokeRoundRect(nrX, nrY, nrW, nrH, 8, holdProg > 0 ? [255,120,120] : [180,80,80], 2);
-            fillText(holdProg > 0 ? "꾹!" : "다음", WIDTH-10-btnW/2, HEIGHT-btnH-5, WHITE, 'bold 18px "Malgun Gothic",sans-serif', 'center');
-            fillText(holdProg > 0 ? `${Math.round(holdProg*100)}%` : "라운드", WIDTH-10-btnW/2, HEIGHT-btnH+18, WHITE, 'bold 14px "Malgun Gothic",sans-serif', 'center');
+            strokeRoundRect(nrX, nrY, nrW2, nrH2, 8, holdProg > 0 ? [255,120,120] : [180,80,80], 2);
+            fillText(holdProg > 0 ? `꾹! ${Math.round(holdProg*100)}%` : "다음 라운드 ▸", nrX+nrW2/2, nrY+nrH2/2+6, WHITE, 'bold 15px "Malgun Gothic",sans-serif', 'center');
         }
     }
 
@@ -2078,12 +2549,6 @@ class PinballGame {
 
     _handleTouchStart(x, y, id) {
         if (this.state === 'menu') {
-            // Check if TEST button was tapped (top-right corner)
-            const bx = WIDTH - 70, by = 15, bw = 60, bh = 30;
-            if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
-                this._onKeyDown('KeyT');
-                return;
-            }
             this._onKeyDown('Space');
             return;
         }
@@ -2128,28 +2593,112 @@ class PinballGame {
         }
         if (this.state === 'shop') {
             if (this._stateChangeCooldown > 0) return; // ignore touch during cooldown
-            const btnH = 50, btnW = WIDTH*0.28;
-            // Up button
-            if (x < btnW+10 && y > HEIGHT-btnH*2-10 && y < HEIGHT-btnH-5) {
-                this._onKeyDown('ArrowUp'); return;
+
+            // Upgrade choice overlay touch
+            if (this.upgrade_choices) {
+                const cardW = 150, cardH = 200, gap = 20;
+                const totalCW = this.upgrade_choices.length * cardW + (this.upgrade_choices.length - 1) * gap;
+                const startCX = WIDTH/2 - totalCW/2;
+                const cy = 130;
+
+                for (let ci = 0; ci < this.upgrade_choices.length; ci++) {
+                    const cx = startCX + ci * (cardW + gap);
+                    if (x >= cx && x <= cx + cardW && y >= cy && y <= cy + cardH) {
+                        this.upgrade_pick = ci;
+                        this._upgrade_pick_confirm();
+                        return;
+                    }
+                }
+                // Touch outside cards = cancel
+                if (y > cy + cardH + 30 || y < cy - 30) {
+                    this.upgrade_choices = null;
+                }
+                return;
             }
-            // Down button
-            if (x < btnW+10 && y > HEIGHT-btnH-5) {
-                this._onKeyDown('ArrowDown'); return;
+
+            // Tab bar touch (y: 95 to 123)
+            const tabY = 95, tabH = 28, tabW = (WIDTH - 40) / 3;
+            if (y >= tabY && y <= tabY + tabH) {
+                const ti = Math.floor((x - 20) / tabW);
+                if (ti >= 0 && ti < 3 && ti !== this.shop_tab) {
+                    this.shop_tab = ti;
+                    this.shop_cursor = 0;
+                }
+                return;
             }
+
+            // Bottom buttons
+            const btnH = 50;
+            const buyW = WIDTH * 0.45;
+            const nrW2 = WIDTH * 0.45;
             // Buy button
-            if (x > WIDTH/2-btnW/2 && x < WIDTH/2+btnW/2 && y > HEIGHT-btnH*2-10 && y < HEIGHT-btnH-5) {
+            if (x < buyW + 10 && y > HEIGHT - btnH - 5) {
                 this._onKeyDown('Space'); return;
             }
             // Next round button (hold to activate)
-            if (x > WIDTH-btnW-10 && y > HEIGHT-btnH*2-10) {
+            if (x > WIDTH - nrW2 - 10 && y > HEIGHT - btnH - 5) {
                 this._nextRoundHolding = true;
                 this._nextRoundTouchId = id;
                 return;
             }
+
+            // Content area touch - select item
+            const content_y = tabY + tabH + 10;
+            if (y >= content_y && y < HEIGHT - btnH - 10) {
+                if (this.shop_tab === 0) {
+                    this.shop_cursor = 0; // only 1 item (draw button)
+                } else if (this.shop_tab === 1) {
+                    this.shop_cursor = 0; // only 1 item (draw button)
+                } else if (this.shop_tab === 2) {
+                    this.shop_cursor = 0;
+                }
+            }
             return;
         }
         if (this.state === 'play') {
+            // Consumable pause menu is open
+            if (this.consumable_open) {
+                const cardW = 80, cardH = 120, cardGap = 10;
+                const invLen = this.consumable_inv.length;
+                const totalW2 = invLen * (cardW + cardGap) - cardGap;
+                const startX2 = WIDTH/2 - totalW2/2;
+                const cardY2 = 210;
+
+                // Card touch
+                if (y >= cardY2 && y <= cardY2 + cardH && invLen > 0) {
+                    const slot = Math.floor((x - startX2) / (cardW + cardGap));
+                    if (slot >= 0 && slot < invLen) {
+                        this.consumable_cursor = slot;
+                        this._use_consumable(slot);
+                        if (this.consumable_inv.length === 0) this.consumable_open = false;
+                        else this.consumable_cursor = Math.min(this.consumable_cursor, this.consumable_inv.length - 1);
+                    }
+                    return;
+                }
+
+                // Close button (y: 430~470)
+                if (y >= 430 && y <= 470 && x >= WIDTH/2 - 60 && x <= WIDTH/2 + 60) {
+                    this.consumable_open = false;
+                    return;
+                }
+
+                // Tap anywhere else to close
+                if (y < cardY2 - 20 || y > cardY2 + cardH + 80) {
+                    this.consumable_open = false;
+                }
+                return;
+            }
+
+            // Consumable box button touch (y: 40 ~ 68)
+            if (y >= 40 && y <= 68 && this.consumable_inv.length > 0) {
+                const boxW = 80, boxX = WIDTH/2 - boxW/2;
+                if (x >= boxX && x <= boxX + boxW) {
+                    this.consumable_open = true;
+                    this.consumable_cursor = 0;
+                    return;
+                }
+            }
+
             // Left flipper zone: left 35%
             if (x < WIDTH*0.35 && y > HEIGHT*0.5) {
                 this.lf.on = true; sndFlip(); return;
