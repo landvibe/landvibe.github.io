@@ -124,11 +124,22 @@ const SHOP_ITEMS = [
     {id:'gravity', name:'가벼운 공', desc:'중력 -10%', max_lv:5, icon:'🎈'},
     {id:'score_boost', name:'점수 부스트', desc:'기본 배율 +0.2', max_lv:5, icon:'📈'},
     {id:'bumper_bonus', name:'범퍼 보너스', desc:'범퍼 점수 +30%', max_lv:5, icon:'💥'},
-    {id:'flipper_size', name:'큰 플리퍼', desc:'플리퍼 길이 +10', max_lv:5, icon:'📏'},
+    {id:'flipper_size', name:'큰 플리퍼', desc:'플리퍼 길이 +5', max_lv:5, icon:'📏'},
 ];
 const UPGRADE_DRAW_COST = 5;
 const CONSUMABLE_DRAW_COST = 4;
 const GACHA_COST = 5;
+const RELIC_COST = 12;
+
+const RELICS = [
+    {id:'extra_box', name:'깊은 상자', desc:'소모품 슬롯 +1', icon:'📦'},
+    {id:'extra_life', name:'생명의 산호', desc:'기본 생명 +1', icon:'🪸'},
+    {id:'gold_rush', name:'황금 조개', desc:'라운드 기본 골드 +2', icon:'🐚'},
+    {id:'jelly_bounty', name:'해파리 왕관', desc:'해파리 골드 2배', icon:'👑'},
+    {id:'combo_anchor', name:'콤보 닻', desc:'콤보 유지시간 +50%', icon:'⚓'},
+    {id:'big_pin', name:'거대 핀', desc:'드레인 세이버 크기 1.6배', icon:'📍'},
+    {id:'triple_choice', name:'선택의 나침반', desc:'강화 뽑기 선택지 +1', icon:'🧭'},
+];
 
 const CONSUMABLES = [
     {id:'deep_sea', name:'심해 보너스', desc:'10초간 점수 3배', color:[60,180,255], icon:'🌊', weight:20},
@@ -741,7 +752,7 @@ class Boss {
     constructor(x, y, ante) {
         this.x = x; this.y = y;
         this.r = 30 + ante * 3; // grows with ante
-        this.max_hp = 3 + ante * 2; // ante1=5, ante2=7, ante3=9...
+        this.max_hp = 3 + ante; // ante1=4, ante2=5, ante3=6...
         this.hp = this.max_hp;
         this.alive = true;
         this.hit_t = 0;
@@ -1210,11 +1221,12 @@ class PinballGame {
         this.gold = 0; this.gold_earned = 0; this.round_clear_timer = 0;
         this.boss = null; this.boss_killed_gold = 0;
         this.shop_cursor = 0;
-        this.shop_tab = 0; // 0=강화 뽑기, 1=소모품 뽑기, 2=공 뽑기
+        this.shop_tab = 0; // 0=강화 뽑기, 1=소모품 뽑기, 2=공 뽑기, 3=유물 뽑기
         this.upgrades = {};
         for (const item of SHOP_ITEMS) this.upgrades[item.id] = 0;
         this.upgrade_choices = null; // [item, item] two choices
         this.upgrade_pick = 0; // 0 or 1
+        this.upgrade_draw_count = 0; // 강화 뽑기 횟수 (비용 증가용)
 
         // Consumables inventory (persists across rounds, max 2 slots)
         this.consumable_inv = []; // array of consumable ids in inventory
@@ -1228,9 +1240,17 @@ class PinballGame {
         this.slow_time_timer = 0;
         this.combo_master = false;
 
-        // Ball gacha
-        this.current_ball_type = null;
+        // Ball gacha (3 slots: main, 2nd, 3rd)
+        this.ball_slots = [null, null, null];
+        this.current_ball_type = null; // alias for ball_slots[0]
         this.gacha_result = null; this.gacha_result_timer = 0;
+
+        // Relics (permanent passives)
+        this.relics = {};
+        this.relic_result = null; this.relic_result_timer = 0;
+        this.relic_bought_ante = 0; // 현재 앤티에서 구매한 유물 수
+        this.relic_choices = null; // [relic, relic] two choices
+        this.relic_pick = 0;
 
         // Next round hold timer (prevent accidental skip)
         this._nextRoundHold = 0;
@@ -1321,17 +1341,26 @@ class PinballGame {
         } else if (this.state === 'shop') {
             // If upgrade choices are shown, handle pick
             if (this.upgrade_choices) {
-                if (code === 'ArrowLeft') this.upgrade_pick = 0;
-                else if (code === 'ArrowRight') this.upgrade_pick = 1;
+                const maxPick = this.upgrade_choices.length - 1;
+                if (code === 'ArrowLeft') this.upgrade_pick = Math.max(0, this.upgrade_pick - 1);
+                else if (code === 'ArrowRight') this.upgrade_pick = Math.min(maxPick, this.upgrade_pick + 1);
                 else if (code === 'Space' || code === 'Enter') this._upgrade_pick_confirm();
                 return; // must pick one, no cancel
             }
-            const tabCounts = [1, 1, 1]; // items per tab (draw buttons)
+            // If relic choices are shown, handle pick
+            if (this.relic_choices) {
+                const maxPick = this.relic_choices.length - 1;
+                if (code === 'ArrowLeft') this.relic_pick = Math.max(0, this.relic_pick - 1);
+                else if (code === 'ArrowRight') this.relic_pick = Math.min(maxPick, this.relic_pick + 1);
+                else if (code === 'Space' || code === 'Enter') this._relic_pick_confirm();
+                return; // must pick one, no cancel
+            }
+            const tabCounts = [1, 1, 3, 1]; // items per tab (draw buttons; gacha has 3 slots)
             const total = tabCounts[this.shop_tab];
             if (code === 'ArrowUp') this.shop_cursor = (this.shop_cursor - 1 + total) % total;
             else if (code === 'ArrowDown') this.shop_cursor = (this.shop_cursor + 1) % total;
-            else if (code === 'ArrowLeft') { this.shop_tab = (this.shop_tab - 1 + 3) % 3; this.shop_cursor = 0; }
-            else if (code === 'ArrowRight') { this.shop_tab = (this.shop_tab + 1) % 3; this.shop_cursor = 0; }
+            else if (code === 'ArrowLeft') { this.shop_tab = (this.shop_tab - 1 + 4) % 4; this.shop_cursor = 0; }
+            else if (code === 'ArrowRight') { this.shop_tab = (this.shop_tab + 1) % 4; this.shop_cursor = 0; }
             else if (code === 'Space') this._shop_buy();
             else if (code === 'Enter') this._nextRoundHolding = true;
         } else if (this.state === 'play') {
@@ -1347,18 +1376,20 @@ class PinballGame {
                 } else if (code === 'Space' || code === 'Enter') {
                     if (this.consumable_inv.length > 0 && this.consumable_cursor < this.consumable_inv.length) {
                         this._use_consumable(this.consumable_cursor);
-                        if (this.consumable_inv.length === 0) this.consumable_open = false;
-                        else this.consumable_cursor = Math.min(this.consumable_cursor, this.consumable_inv.length - 1);
+                        if (this.consumable_inv.length > 0)
+                            this.consumable_cursor = Math.min(this.consumable_cursor, this.consumable_inv.length - 1);
                     }
+                } else if (code === 'KeyM') {
+                    // 메인 화면으로 돌아가기
+                    this.consumable_open = false;
+                    this.state = 'menu';
                 }
                 return; // block other play inputs while menu is open
             }
 
             if (code === 'KeyQ' || code === 'Tab') {
-                if (this.consumable_inv.length > 0) {
-                    this.consumable_open = true;
-                    this.consumable_cursor = 0;
-                }
+                this.consumable_open = true;
+                this.consumable_cursor = 0;
                 return;
             }
             if (code === 'KeyZ' || code === 'ShiftLeft') { this._flipper_on('left'); }
@@ -1421,7 +1452,7 @@ class PinballGame {
             {
                 bumpers: [
                     [130, 230, 22, 'jelly', 150],
-                    [350, 230, 22, 'jelly', 150],
+                    [350, 230, 22, 'puffer', 150],
                     [240, 310, 25, 'puffer', 120],
                 ],
                 drops: [[100,380,FISH_COL[1],200],[180,360,FISH_COL[3],200],[260,350,FISH_COL[0],200],[340,360,FISH_COL[4],200],[420,380,FISH_COL[2],200]],
@@ -1434,7 +1465,7 @@ class PinballGame {
                     [160, 220, 20, 'puffer', 100],
                     [320, 220, 20, 'puffer', 100],
                     [240, 280, 25, 'jelly', 180],
-                    [160, 340, 20, 'jelly', 150],
+                    [160, 340, 20, 'puffer', 150],
                 ],
                 drops: [[140,440,FISH_COL[2],220],[220,420,FISH_COL[0],220],[300,420,FISH_COL[4],220],[380,440,FISH_COL[1],220]],
                 spinner: [300, 490],
@@ -1456,7 +1487,7 @@ class PinballGame {
                 bumpers: [
                     [240, 190, 22, 'puffer', 130],
                     [160, 280, 22, 'jelly', 170],
-                    [320, 280, 22, 'jelly', 170],
+                    [320, 280, 22, 'puffer', 170],
                     [240, 360, 22, 'puffer', 130],
                 ],
                 drops: [[130,450,FISH_COL[0],250],[210,430,FISH_COL[2],250],[290,430,FISH_COL[4],250],[370,450,FISH_COL[1],250]],
@@ -1466,11 +1497,11 @@ class PinballGame {
             // Ante 6: 밀집 배치
             {
                 bumpers: [
-                    [180, 230, 20, 'jelly', 160],
+                    [180, 230, 20, 'puffer', 160],
                     [300, 230, 20, 'jelly', 160],
                     [240, 300, 22, 'puffer', 140],
                     [180, 370, 20, 'puffer', 140],
-                    [300, 370, 20, 'jelly', 180],
+                    [300, 370, 20, 'puffer', 180],
                 ],
                 drops: [[120,440,FISH_COL[4],280],[200,425,FISH_COL[2],280],[280,420,FISH_COL[0],280],[360,425,FISH_COL[3],280]],
                 spinner: [250, 480],
@@ -1481,7 +1512,7 @@ class PinballGame {
                 bumpers: [
                     [140, 220, 22, 'puffer', 150],
                     [280, 260, 25, 'jelly', 200],
-                    [170, 340, 22, 'jelly', 180],
+                    [170, 340, 22, 'puffer', 180],
                     [340, 310, 22, 'puffer', 150],
                 ],
                 drops: [[100,430,FISH_COL[1],300],[180,400,FISH_COL[3],300],[260,410,FISH_COL[0],300],[340,400,FISH_COL[4],300],[420,430,FISH_COL[2],300]],
@@ -1491,8 +1522,8 @@ class PinballGame {
             // Ante 8: 최종 - 대형 배치
             {
                 bumpers: [
-                    [180, 210, 24, 'jelly', 200],
-                    [310, 210, 24, 'jelly', 200],
+                    [180, 210, 24, 'puffer', 200],
+                    [310, 210, 24, 'puffer', 200],
                     [130, 310, 20, 'puffer', 160],
                     [360, 310, 20, 'puffer', 160],
                     [240, 360, 26, 'jelly', 250],
@@ -1509,11 +1540,15 @@ class PinballGame {
         this.bumpers = m.bumpers.map(b => new Bumper(b[0], b[1], b[2], b[3], b[4]));
         this._current_map_drops = m.drops;
         this.spinner = new Spinner(m.spinner[0], m.spinner[1]);
-        this.pin = new Pin(m.pin[0], m.pin[1], m.pin[2], m.pin[3]);
+        const pinR = m.pin[2] * (this.relics.big_pin ? 1.6 : 1);
+        this.pin = new Pin(m.pin[0], m.pin[1], pinR, m.pin[3]);
     }
 
     _spawn_plunger() {
-        this.balls.push(new Ball(this.plunger.x, 720, 0, 0, this.current_ball_type));
+        const slotIdx = Math.min(this.ball_launch_index || 0, 2);
+        const ballType = this.ball_slots[slotIdx];
+        this.current_ball_type = ballType; // 글로벌 효과를 현재 공에 맞춤
+        this.balls.push(new Ball(this.plunger.x, 720, 0, 0, ballType));
         this.ball_in_p = true;
     }
 
@@ -1541,7 +1576,7 @@ class PinballGame {
         this.flipper_power_val = 1.0 + 0.15*lv.flipper_power;
         this.base_multi = 1.0 + 0.2*lv.score_boost;
         this.bumper_mult_val = 1.0 + 0.3*lv.bumper_bonus;
-        const newLen = FLIP_LEN + lv.flipper_size*10;
+        const newLen = FLIP_LEN + lv.flipper_size*5;
         this.lf.length = newLen; this.rf.length = newLen;
     }
 
@@ -1554,8 +1589,12 @@ class PinballGame {
         this.consumable_inv = []; this.deep_sea_timer = 0;
         this.consumable_draw_result = null; this.consumable_draw_timer = 0;
         this.shield_count = 0; this.slow_time_timer = 0; this.combo_master = false;
+        this.ball_slots = [null, null, null];
         this.current_ball_type = null;
         this.gacha_result = null; this.gacha_result_timer = 0;
+        this.relics = {};
+        this.relic_result = null; this.relic_result_timer = 0;
+        this.relic_choices = null; this.relic_pick = 0;
         this.shop_cursor = 0; this.shop_tab = 0;
         this.upgrade_choices = null; this.upgrade_pick = 0; this._upgradeCooldown = 0;
         this.tilt_cnt = 0; this.tilt_lock = false; this.tilt_x = 0;
@@ -1570,15 +1609,19 @@ class PinballGame {
         this._testMode = true;
         this.score = 0; this.lives = 3;
         this.round_num = Math.max(0, this._testRound - 1); // _start_round will increment
-        this.gold = this._testGold;
+        this.gold = this._testGold + (this._testMoney || 0);
         this.upgrades = {};
         for (const item of SHOP_ITEMS) this.upgrades[item.id] = 0;
         this.consumable_inv = []; this.deep_sea_timer = 0;
         this.consumable_draw_result = null; this.consumable_draw_timer = 0;
         this.upgrade_choices = null; this.upgrade_pick = 0; this._upgradeCooldown = 0;
         this.shield_count = 0; this.slow_time_timer = 0; this.combo_master = false;
+        this.ball_slots = [null, null, null];
         this.current_ball_type = null;
         this.gacha_result = null; this.gacha_result_timer = 0;
+        this.relics = {};
+        this.relic_result = null; this.relic_result_timer = 0;
+        this.relic_choices = null; this.relic_pick = 0;
         this.shop_cursor = 0; this.shop_tab = 0;
         this.tilt_cnt = 0; this.tilt_lock = false; this.tilt_x = 0;
         this.multi = 1; this.combo = 0; this.combo_t = 0;
@@ -1610,7 +1653,8 @@ class PinballGame {
         this.round_score = 0;
         this.round_bonus_gold = 0;
         this.round_target = this._get_round_target();
-        this.lives = 3;
+        this.lives = 3 + (this.relics.extra_life ? 1 : 0);
+        this.ball_launch_index = 0; // 현재 발사할 공 슬롯 인덱스
         this.state = 'play';
         this.balls = [];
         this.tilt_cnt = 0; this.tilt_lock = false; this.tilt_x = 0;
@@ -1628,6 +1672,7 @@ class PinballGame {
         // Setup new map layout when ante changes (stage 1)
         if (this._get_stage() === 1 || this.round_num === 1) {
             this._setup_map(this._get_ante());
+            this.relic_bought_ante = 0; // 앤티 변경 시 유물 구매 횟수 리셋
         }
 
         // Spawn boss on boss rounds (stage 3 of each ante)
@@ -1650,7 +1695,7 @@ class PinballGame {
         const ball_bonus = alive_balls * 2; // +2G per remaining ball
         const bumper_gold = this.round_bonus_gold || 0;
         const boss_gold = this.boss_killed_gold || 0;
-        const base_gold = GOLD_PER_ROUND;
+        const base_gold = GOLD_PER_ROUND + (this.relics.gold_rush ? 2 : 0);
         this.gold_earned = Math.floor((base_gold + bumper_gold + boss_gold) * gold_mult) + ball_bonus;
         this.bumper_gold_earned = bumper_gold;
         this.boss_gold_earned = boss_gold;
@@ -1675,7 +1720,8 @@ class PinballGame {
         this.popups.push(new ScorePopup(x, y, `+${actual}`, has_mult ? GOLD_C : SCORE_C));
         const combo_ext = bt_eff.combo_extend || 1.0;
         const combo_master_mult = this.combo_master ? 2.0 : 1.0;
-        this.combo++; this.combo_t = Math.floor(120*combo_ext*combo_master_mult);
+        const relic_combo = this.relics.combo_anchor ? 1.5 : 1.0;
+        this.combo++; this.combo_t = Math.floor(120*combo_ext*combo_master_mult*relic_combo);
         if (this.score >= this.next_bonus && !this.bonus.active) {
             this.bonus.start(); this.next_bonus += this.bonus_th; sndBonus();
         }
@@ -1723,22 +1769,32 @@ class PinballGame {
         } else if (this.shop_tab === 2) {
             // Gacha draw
             this._gacha_draw();
+        } else if (this.shop_tab === 3) {
+            // Relic draw
+            this._relic_draw();
         }
+    }
+
+    _get_upgrade_cost() {
+        return Math.min(UPGRADE_DRAW_COST + this.upgrade_draw_count, 15);
     }
 
     _upgrade_draw() {
         if (this.upgrade_choices) return; // already choosing
         if (this._upgradeCooldown > 0) return; // cooldown after pick
-        if (this.gold < UPGRADE_DRAW_COST) return;
+        const cost = this._get_upgrade_cost();
+        if (this.gold < cost) return;
         // Check if any upgrades available
         const available = SHOP_ITEMS.filter(item => this.upgrades[item.id] < item.max_lv);
         if (available.length === 0) return;
 
-        this.gold -= UPGRADE_DRAW_COST;
+        this.gold -= cost;
+        this.upgrade_draw_count++;
 
-        // Pick 2 random different upgrades (or 1 if only 1 available)
+        // Pick 2 (or 3 with relic) random different upgrades
+        const pick_count = 2 + (this.relics.triple_choice ? 1 : 0);
         const shuffled = [...available].sort(() => Math.random() - 0.5);
-        const picks = shuffled.slice(0, Math.min(2, shuffled.length));
+        const picks = shuffled.slice(0, Math.min(pick_count, shuffled.length));
 
         this.upgrade_choices = picks;
         this.upgrade_pick = 0;
@@ -1820,10 +1876,51 @@ class PinballGame {
             cumul += bt.weight;
             if (roll <= cumul) { chosen = bt; break; }
         }
-        this.current_ball_type = chosen;
+        // Assign to selected slot (shop_cursor 0,1,2 in gacha tab)
+        const slot = this.shop_cursor;
+        this.ball_slots[slot] = chosen;
+        this.current_ball_type = this.ball_slots[0]; // main ball = slot 0
         this.gacha_result = chosen;
         this.gacha_result_timer = 180;
         sndRoundClear();
+    }
+
+    _relic_draw() {
+        if (this.relic_choices) return; // already choosing
+        if (this.gold < RELIC_COST) return;
+        if (this.relic_bought_ante >= 1) return; // 앤티당 1회 제한
+        const available = RELICS.filter(r => !this.relics[r.id]);
+        if (available.length === 0) return;
+        this.gold -= RELIC_COST;
+        this.relic_bought_ante++;
+
+        // Pick 2 random different relics (or 1 if only 1 available)
+        const shuffled = [...available].sort(() => Math.random() - 0.5);
+        const picks = shuffled.slice(0, Math.min(2, shuffled.length));
+        this.relic_choices = picks;
+        this.relic_pick = 0;
+        sndBuy();
+    }
+
+    _relic_pick_confirm() {
+        if (!this.relic_choices) return;
+        const chosen = this.relic_choices[this.relic_pick];
+        if (!chosen) return;
+        this.relics[chosen.id] = true;
+        this._apply_relics();
+        this.relic_result = chosen;
+        this.relic_result_timer = 180;
+        this.relic_choices = null;
+        sndRoundClear();
+    }
+
+    _apply_relics() {
+        // extra_box: consumable_max
+        this.consumable_max = 2 + (this.relics.extra_box ? 1 : 0);
+        // big_pin: update pin radius immediately
+        if (this.pin) {
+            this.pin.r = (this.relics.big_pin ? 8 : 5);
+        }
     }
 
     _update() {
@@ -1842,6 +1939,7 @@ class PinballGame {
             if (this._stateChangeCooldown > 0) this._stateChangeCooldown--;
             if (this._upgradeCooldown > 0) this._upgradeCooldown--;
             if (this.gacha_result_timer > 0) this.gacha_result_timer--;
+            if (this.relic_result_timer > 0) this.relic_result_timer--;
             if (this.consumable_draw_timer > 0) this.consumable_draw_timer--;
             // Next round hold logic
             if (this._nextRoundHolding) {
@@ -1944,13 +2042,14 @@ class PinballGame {
                         this._add_score(bmp_pts, bmp.x, bmp.y - 20);
                         this._spawn_fx(ball.x, ball.y, bmp.style==='puffer'?PUFFER_Y:JELLY_P, 10, 4, 20, 3);
                         sndBump();
-                        // +1 gold per jellyfish hit only
+                        // +0.5 gold per jellyfish hit (jelly_bounty doubles it)
                         if (bmp.style === 'jelly') {
-                            this.round_bonus_gold++;
-                            this.popups.push(new ScorePopup(bmp.x + 20, bmp.y - 35, '+1G', GOLD_C));
+                            const jellyGold = 0.5 * (this.relics.jelly_bounty ? 2 : 1);
+                            this.round_bonus_gold += jellyGold;
+                            this.popups.push(new ScorePopup(bmp.x + 20, bmp.y - 35, `+${jellyGold}G`, GOLD_C));
                         }
                         if ((bt_eff.split_chance || 0) > 0) {
-                            if (Math.random() < bt_eff.split_chance) split_spawns.push([ball.x, ball.y]);
+                            if (Math.random() < bt_eff.split_chance) split_spawns.push([ball.x, ball.y, ball.ball_type]);
                         }
                     }
                 }
@@ -2027,8 +2126,8 @@ class PinballGame {
             if (ball.y > HEIGHT + 20) { ball.active = false; drained.push(ball); }
         }
 
-        for (const [sx, sy] of split_spawns) {
-            this.balls.push(new Ball(sx, sy, randUniform(-3,3), randUniform(-4,-1), this.current_ball_type));
+        for (const [sx, sy, sbt] of split_spawns) {
+            this.balls.push(new Ball(sx, sy, randUniform(-3,3), randUniform(-4,-1), sbt));
             this._spawn_fx(sx, sy, [180,100,255], 8, 3, 15, 2);
         }
 
@@ -2055,6 +2154,7 @@ class PinballGame {
                 // skip life loss
             } else {
             this.lives--;
+            this.ball_launch_index++; // 다음 공 슬롯으로
             sndDrain();
             if (this.lives <= 0) {
                 this.state = 'gameover';
@@ -2214,8 +2314,8 @@ class PinballGame {
             fillText(`x${t_mult.toFixed(1)}`, WIDTH-10, b_y+15, BALATRO_ORANGE, '14px "Malgun Gothic", sans-serif', 'right');
         }
 
-        // Consumable box button (top area)
-        if (this.consumable_inv.length > 0) {
+        // Consumable box button (top area) - always shown
+        {
             const boxW = 80, boxH = 28, boxX = WIDTH/2 - boxW/2, boxY = 40;
             ctx.fillStyle = 'rgba(40,60,100,0.6)';
             ctx.strokeStyle = 'rgba(100,150,220,0.5)';
@@ -2223,12 +2323,16 @@ class PinballGame {
             roundRect(boxX, boxY, boxW, boxH, 6);
             ctx.fill(); ctx.stroke();
 
-            // Mini icons
-            const iconStartX = boxX + 6;
-            for (let i = 0; i < Math.min(this.consumable_inv.length, 5); i++) {
-                const cid = this.consumable_inv[i];
-                const cons = CONSUMABLES.find(c => c.id === cid);
-                if (cons) fillText(cons.icon, iconStartX + i * 14, boxY + 18, WHITE, '11px "Malgun Gothic", sans-serif', 'left');
+            if (this.consumable_inv.length > 0) {
+                // Mini icons
+                const iconStartX = boxX + 6;
+                for (let i = 0; i < Math.min(this.consumable_inv.length, 5); i++) {
+                    const cid = this.consumable_inv[i];
+                    const cons = CONSUMABLES.find(c => c.id === cid);
+                    if (cons) fillText(cons.icon, iconStartX + i * 14, boxY + 18, WHITE, '11px "Malgun Gothic", sans-serif', 'left');
+                }
+            } else {
+                fillText("📦 비어있음", boxX + 6, boxY + 18, [120,140,170], '10px "Malgun Gothic", sans-serif', 'left');
             }
             fillText(this._isMobile ? '▼' : 'Q', boxX + boxW - 14, boxY + 18, [180,200,230], '11px "Malgun Gothic", sans-serif', 'center');
         }
@@ -2240,68 +2344,86 @@ class PinballGame {
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
             fillText("소모품 박스", WIDTH/2, 140, WHITE, 'bold 28px "Malgun Gothic", sans-serif', 'center');
-            fillText("사용할 소모품을 선택하세요", WIDTH/2, 168, [150,170,210], '14px "Malgun Gothic", sans-serif', 'center');
 
             const cardW = 80, cardH = 120, cardGap = 10;
             const invLen = this.consumable_inv.length;
-            const totalW = invLen * (cardW + cardGap) - cardGap;
-            const startX = WIDTH/2 - totalW/2;
-            const cardY = 210;
 
-            for (let i = 0; i < invLen; i++) {
-                const cid = this.consumable_inv[i];
-                const cons = CONSUMABLES.find(c => c.id === cid);
-                if (!cons) continue;
-                const cx = startX + i * (cardW + cardGap);
-                const selected = (i === this.consumable_cursor);
+            if (invLen > 0) {
+                fillText("사용할 소모품을 선택하세요", WIDTH/2, 168, [150,170,210], '14px "Malgun Gothic", sans-serif', 'center');
 
-                // Card
-                const glow = selected ? 0.5 : 0.15;
-                ctx.fillStyle = `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},${glow})`;
-                ctx.strokeStyle = selected
-                    ? `rgba(${Math.min(255,cons.color[0]+80)},${Math.min(255,cons.color[1]+80)},${Math.min(255,cons.color[2]+80)},1)`
-                    : `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},0.5)`;
-                ctx.lineWidth = selected ? 3 : 1;
-                roundRect(cx, cardY, cardW, cardH, 10);
-                ctx.fill(); ctx.stroke();
+                const totalW = invLen * (cardW + cardGap) - cardGap;
+                const startX = WIDTH/2 - totalW/2;
+                const cardY = 210;
 
-                // Selected glow
-                if (selected) {
-                    ctx.shadowColor = `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},0.6)`;
-                    ctx.shadowBlur = 15;
+                for (let i = 0; i < invLen; i++) {
+                    const cid = this.consumable_inv[i];
+                    const cons = CONSUMABLES.find(c => c.id === cid);
+                    if (!cons) continue;
+                    const cx = startX + i * (cardW + cardGap);
+                    const selected = (i === this.consumable_cursor);
+
+                    // Card
+                    const glow = selected ? 0.5 : 0.15;
+                    ctx.fillStyle = `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},${glow})`;
+                    ctx.strokeStyle = selected
+                        ? `rgba(${Math.min(255,cons.color[0]+80)},${Math.min(255,cons.color[1]+80)},${Math.min(255,cons.color[2]+80)},1)`
+                        : `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},0.5)`;
+                    ctx.lineWidth = selected ? 3 : 1;
                     roundRect(cx, cardY, cardW, cardH, 10);
-                    ctx.stroke();
-                    ctx.shadowBlur = 0;
+                    ctx.fill(); ctx.stroke();
+
+                    // Selected glow
+                    if (selected) {
+                        ctx.shadowColor = `rgba(${cons.color[0]},${cons.color[1]},${cons.color[2]},0.6)`;
+                        ctx.shadowBlur = 15;
+                        roundRect(cx, cardY, cardW, cardH, 10);
+                        ctx.stroke();
+                        ctx.shadowBlur = 0;
+                    }
+
+                    // Icon large
+                    fillText(cons.icon, cx + cardW/2, cardY + 40, WHITE, '30px "Malgun Gothic", sans-serif', 'center');
+                    // Name
+                    fillText(cons.name, cx + cardW/2, cardY + 70, selected ? WHITE : [200,200,220], 'bold 12px "Malgun Gothic", sans-serif', 'center');
+                    // Desc
+                    fillText(cons.desc, cx + cardW/2, cardY + 88, selected ? [220,220,240] : [140,160,190], '10px "Malgun Gothic", sans-serif', 'center');
+
+                    // Selection indicator
+                    if (selected) {
+                        fillText("▲", cx + cardW/2, cardY - 8, cons.color, 'bold 16px sans-serif', 'center');
+                    }
                 }
 
-                // Icon large
-                fillText(cons.icon, cx + cardW/2, cardY + 40, WHITE, '30px "Malgun Gothic", sans-serif', 'center');
-                // Name
-                fillText(cons.name, cx + cardW/2, cardY + 70, selected ? WHITE : [200,200,220], 'bold 12px "Malgun Gothic", sans-serif', 'center');
-                // Desc
-                fillText(cons.desc, cx + cardW/2, cardY + 88, selected ? [220,220,240] : [140,160,190], '10px "Malgun Gothic", sans-serif', 'center');
-
-                // Selection indicator
-                if (selected) {
-                    fillText("▲", cx + cardW/2, cardY - 8, cons.color, 'bold 16px sans-serif', 'center');
+                // Empty slots
+                for (let i = invLen; i < this.consumable_max; i++) {
+                    const cx = startX + i * (cardW + cardGap);
+                    ctx.fillStyle = 'rgba(30,40,60,0.3)';
+                    ctx.strokeStyle = 'rgba(60,70,90,0.3)';
+                    ctx.lineWidth = 1;
+                    roundRect(cx, cardY, cardW, cardH, 10);
+                    ctx.fill(); ctx.stroke();
                 }
+
+                // Bottom hint
+                const sel_cons = CONSUMABLES.find(c => c.id === this.consumable_inv[this.consumable_cursor]);
+                if (sel_cons) {
+                    fillText(`[ Space ] ${sel_cons.name} 사용`, WIDTH/2, 380, sel_cons.color, 'bold 16px "Malgun Gothic", sans-serif', 'center');
+                }
+            } else {
+                // Empty inventory message
+                fillText("📦", WIDTH/2, 230, WHITE, '48px "Malgun Gothic", sans-serif', 'center');
+                fillText("소모품이 없습니다", WIDTH/2, 280, [150,170,210], '18px "Malgun Gothic", sans-serif', 'center');
+                fillText("상점에서 소모품을 뽑아보세요!", WIDTH/2, 305, [120,140,170], '13px "Malgun Gothic", sans-serif', 'center');
             }
 
-            // Empty slots
-            for (let i = invLen; i < this.consumable_max; i++) {
-                const cx = startX + i * (cardW + cardGap);
-                ctx.fillStyle = 'rgba(30,40,60,0.3)';
-                ctx.strokeStyle = 'rgba(60,70,90,0.3)';
-                ctx.lineWidth = 1;
-                roundRect(cx, cardY, cardW, cardH, 10);
-                ctx.fill(); ctx.stroke();
-            }
-
-            // Bottom hint
-            const sel_cons = this.consumable_inv.length > 0 ? CONSUMABLES.find(c => c.id === this.consumable_inv[this.consumable_cursor]) : null;
-            if (sel_cons) {
-                fillText(`[ Space ] ${sel_cons.name} 사용`, WIDTH/2, 380, sel_cons.color, 'bold 16px "Malgun Gothic", sans-serif', 'center');
-            }
+            // "메인 화면으로" button (always shown)
+            const menuBtnX = WIDTH/2 - 70, menuBtnY = 470, menuBtnW = 140, menuBtnH = 40;
+            ctx.fillStyle = 'rgba(40,60,100,0.7)';
+            ctx.strokeStyle = 'rgba(100,150,220,0.6)';
+            ctx.lineWidth = 1;
+            roundRect(menuBtnX, menuBtnY, menuBtnW, menuBtnH, 8);
+            ctx.fill(); ctx.stroke();
+            fillText("🏠 메인 화면으로", WIDTH/2, menuBtnY + menuBtnH/2 + 6, [200,220,255], 'bold 15px "Malgun Gothic", sans-serif', 'center');
 
             if (this._isMobile) {
                 // Close button
@@ -2313,7 +2435,7 @@ class PinballGame {
                 ctx.fill(); ctx.stroke();
                 fillText("닫기", WIDTH/2, clY + clH/2 + 6, WHITE, 'bold 16px "Malgun Gothic", sans-serif', 'center');
             } else {
-                fillText("[ ←→ ] 선택   [ Space ] 사용   [ Q / ESC ] 닫기", WIDTH/2, 420, [120,140,180], '13px "Malgun Gothic", sans-serif', 'center');
+                fillText("[ ←→ ] 선택   [ Space ] 사용   [ M ] 메인으로   [ Q / ESC ] 닫기", WIDTH/2, 420, [120,140,180], '12px "Malgun Gothic", sans-serif', 'center');
             }
 
             fillText("⏸ 일시정지", WIDTH/2, 110, [200,200,100], '14px "Malgun Gothic", sans-serif', 'center');
@@ -2554,11 +2676,11 @@ class PinballGame {
         fillText(`❤️ ${this.lives}`, WIDTH-40, 82, PEARL, '14px "Malgun Gothic", sans-serif', 'right');
 
         // === TAB BAR ===
-        const tabNames = ['강화 뽑기', '소모품 뽑기', '공 뽑기'];
+        const tabNames = ['강화 뽑기', '소모품 뽑기', '공 뽑기', '유물 뽑기'];
         const tabY = 95;
         const tabH = 28;
-        const tabW = (WIDTH - 40) / 3;
-        for (let ti = 0; ti < 3; ti++) {
+        const tabW = (WIDTH - 40) / 4;
+        for (let ti = 0; ti < 4; ti++) {
             const tx = 20 + ti * tabW;
             const isActive = (this.shop_tab === ti);
             ctx.fillStyle = isActive ? 'rgba(80,140,255,0.35)' : 'rgba(30,40,60,0.6)';
@@ -2566,7 +2688,7 @@ class PinballGame {
             ctx.lineWidth = isActive ? 2 : 1;
             roundRect(tx, tabY, tabW - 4, tabH, 6);
             ctx.fill(); ctx.stroke();
-            fillText(tabNames[ti], tx + (tabW-4)/2, tabY + tabH/2 + 5, isActive ? WHITE : [140,150,180], `${isActive?'bold ':''}14px "Malgun Gothic", sans-serif`, 'center');
+            fillText(tabNames[ti], tx + (tabW-4)/2, tabY + tabH/2 + 5, isActive ? WHITE : [140,150,180], `${isActive?'bold ':''}12px "Malgun Gothic", sans-serif`, 'center');
         }
 
         const content_y = tabY + tabH + 10;
@@ -2593,7 +2715,8 @@ class PinballGame {
             // Draw button
             const btnY = summY + 12 + SHOP_ITEMS.length * rowH + 16;
             const allMaxed = SHOP_ITEMS.every(item => this.upgrades[item.id] >= item.max_lv);
-            const canDraw = !allMaxed && this.gold >= UPGRADE_DRAW_COST;
+            const upgCost = this._get_upgrade_cost();
+            const canDraw = !allMaxed && this.gold >= upgCost;
             const btnBg = allMaxed ? [25,55,40] : (canDraw ? [40,70,140] : SHOP_PANEL);
             const btnBorder = allMaxed ? [60,120,60] : (canDraw ? [80,140,255] : [60,80,120]);
 
@@ -2602,7 +2725,7 @@ class PinballGame {
             if (allMaxed) {
                 fillText('🎉 모든 강화 완료!', WIDTH/2, btnY+28, [100,220,100], 'bold 18px "Malgun Gothic", sans-serif', 'center');
             } else {
-                fillText(`🎲 강화 뽑기  (${UPGRADE_DRAW_COST}G)`, WIDTH/2, btnY+22, canDraw ? WHITE : [120,120,140], 'bold 18px "Malgun Gothic", sans-serif', 'center');
+                fillText(`🎲 강화 뽑기  (${upgCost}G)`, WIDTH/2, btnY+22, canDraw ? WHITE : [120,120,140], 'bold 18px "Malgun Gothic", sans-serif', 'center');
                 fillText('2개 중 1개 선택', WIDTH/2, btnY+40, [140,160,200], '11px "Malgun Gothic", sans-serif', 'center');
             }
 
@@ -2687,6 +2810,7 @@ class PinballGame {
                     fillText('카드를 터치하여 선택', WIDTH/2, 360, [120,140,170], '14px "Malgun Gothic", sans-serif', 'center');
                 }
             }
+
         }
 
         // === TAB 1: CONSUMABLE DRAW ===
@@ -2784,49 +2908,58 @@ class PinballGame {
             }
         }
 
-        // === TAB 2: GACHA ===
+        // === TAB 2: GACHA (3 slots) ===
         else if (this.shop_tab === 2) {
-            const gacha_sel = (this.shop_cursor === 0);
             const can_gacha = this.gold >= GACHA_COST;
+            const slotLabels = ['1번째 공', '2번째 공', '3번째 공'];
 
-            // Draw button
-            const btnY = content_y;
-            const btnH = 60;
-            let gbg, gbd;
-            if (gacha_sel) { gbg = SHOP_HIGHLIGHT; gbd = [100,180,255]; }
-            else { gbg = [30,40,70]; gbd = [50,80,140]; }
-            fillRoundRect(24, btnY, WIDTH-48, btnH, 8, gbg);
-            strokeRoundRect(24, btnY, WIDTH-48, btnH, 8, gbd, 2);
+            // 3 slot cards
+            const slotH = 72;
+            const slotGap = 8;
+            let slotY = content_y;
+            for (let si = 0; si < 3; si++) {
+                const sel = (this.shop_cursor === si);
+                const sbt = this.ball_slots[si];
+                let sbg, sbd;
+                if (sel) { sbg = SHOP_HIGHLIGHT; sbd = [100,180,255]; }
+                else { sbg = [20,30,50]; sbd = [40,60,100]; }
+                fillRoundRect(24, slotY, WIDTH-48, slotH, 8, sbg);
+                strokeRoundRect(24, slotY, WIDTH-48, slotH, 8, sbd, sel ? 2 : 1);
 
-            const g_txt_col = gacha_sel ? [20,20,30] : WHITE;
-            const g_cost_col = gacha_sel ? [20,20,30] : (can_gacha ? GOLD_C : [120,80,80]);
-            fillText("🎰 공 뽑기", 44, btnY+24, g_txt_col, 'bold 20px "Malgun Gothic", sans-serif', 'left');
-            fillText("랜덤 공을 뽑습니다 (일반/희귀/전설)", 44, btnY+46, gacha_sel ? [50,50,60] : [130,160,200], '13px "Malgun Gothic", sans-serif', 'left');
-            fillText(`${GACHA_COST}G`, WIDTH-68, btnY+24, g_cost_col, 'bold 20px "Malgun Gothic", sans-serif', 'right');
+                // Slot label
+                const labelCol = sel ? [20,20,30] : [140,170,210];
+                fillText(slotLabels[si], 44, slotY+16, labelCol, 'bold 13px "Malgun Gothic", sans-serif', 'left');
 
-            // Current ball display
-            const ballBoxY = btnY + btnH + 16;
-            fillRoundRect(24, ballBoxY, WIDTH-48, 100, 8, [20,30,50]);
-            strokeRoundRect(24, ballBoxY, WIDTH-48, 100, 8, [40,60,100], 1);
-            fillText("현재 공", 44, ballBoxY+20, [140,170,210], '13px "Malgun Gothic", sans-serif', 'left');
+                // Cost
+                const costCol = sel ? [20,20,30] : (can_gacha ? GOLD_C : [120,80,80]);
+                fillText(`${GACHA_COST}G`, WIDTH-44, slotY+16, costCol, 'bold 13px "Malgun Gothic", sans-serif', 'right');
 
-            const cbt = this.current_ball_type;
-            if (cbt) {
-                fillCircle(60, ballBoxY+55, 16, cbt.color);
-                fillCircle(56, ballBoxY+51, 5, WHITE);
-                strokeCircle(60, ballBoxY+55, 16, lerp_col(cbt.color, BLACK, 0.3), 2);
-                const rc = RARITY_COLORS[cbt.rarity];
-                fillText(`[${cbt.rarity_name}] ${cbt.name}`, 84, ballBoxY+50, rc, 'bold 16px "Malgun Gothic", sans-serif', 'left');
-                fillText(cbt.desc, 84, ballBoxY+72, [150,180,220], '13px "Malgun Gothic", sans-serif', 'left');
-            } else {
-                fillCircle(60, ballBoxY+55, 16, PEARL);
-                fillCircle(56, ballBoxY+51, 5, WHITE);
-                fillText("기본 공 장착 중", 84, ballBoxY+50, [180,200,220], '16px "Malgun Gothic", sans-serif', 'left');
-                fillText("골드로 새 공을 뽑아보세요!", 84, ballBoxY+72, [130,160,200], '13px "Malgun Gothic", sans-serif', 'left');
+                // Ball info
+                if (sbt) {
+                    fillCircle(52, slotY+46, 12, sbt.color);
+                    fillCircle(49, slotY+43, 4, WHITE);
+                    strokeCircle(52, slotY+46, 12, lerp_col(sbt.color, BLACK, 0.3), 2);
+                    const rc = RARITY_COLORS[sbt.rarity];
+                    fillText(`[${sbt.rarity_name}] ${sbt.name}`, 72, slotY+42, rc, 'bold 14px "Malgun Gothic", sans-serif', 'left');
+                    fillText(sbt.desc, 72, slotY+60, sel ? [40,50,70] : [150,180,220], '12px "Malgun Gothic", sans-serif', 'left');
+                } else {
+                    fillCircle(52, slotY+46, 12, PEARL);
+                    fillCircle(49, slotY+43, 4, WHITE);
+                    fillText("기본 공", 72, slotY+42, sel ? [40,50,70] : [180,200,220], '14px "Malgun Gothic", sans-serif', 'left');
+                    fillText("뽑기로 공을 장착하세요", 72, slotY+60, sel ? [60,60,80] : [130,160,200], '12px "Malgun Gothic", sans-serif', 'left');
+                }
+
+                // Selection arrow
+                if (sel) fillText("▶", 32, slotY+46, [20,20,30], 'bold 14px "Malgun Gothic", sans-serif', 'left');
+
+                slotY += slotH + slotGap;
             }
 
+            // Draw instruction
+            fillText("[ ↑↓ ] 슬롯 선택  [ Space ] 뽑기", WIDTH/2, slotY+8, [100,130,180], '12px "Malgun Gothic", sans-serif', 'center');
+
             // Ball types reference
-            const refY = ballBoxY + 116;
+            const refY = slotY + 28;
             fillText("공 종류 안내", 44, refY, [140,170,210], '13px "Malgun Gothic", sans-serif', 'left');
             const BALL_TYPES_REF = typeof BALL_TYPES !== 'undefined' ? BALL_TYPES : [];
             for (let bi = 0; bi < BALL_TYPES_REF.length && bi < 9; bi++) {
@@ -2840,9 +2973,132 @@ class PinballGame {
             }
         }
 
+        // === TAB 3: RELIC DRAW ===
+        else if (this.shop_tab === 3) {
+            const relic_sel = (this.shop_cursor === 0);
+            const available = RELICS.filter(r => !this.relics[r.id]);
+            const allOwned = available.length === 0;
+            const anteLimitReached = this.relic_bought_ante >= 1;
+            const can_relic = !allOwned && !anteLimitReached && this.gold >= RELIC_COST;
+
+            // Owned relics display
+            const ownedRelics = RELICS.filter(r => this.relics[r.id]);
+            fillText(`보유 유물: ${ownedRelics.length}/${RELICS.length}`, WIDTH/2, content_y + 6, [140,170,210], '13px "Malgun Gothic", sans-serif', 'center');
+
+            const listY = content_y + 22;
+            if (ownedRelics.length > 0) {
+                for (let ri = 0; ri < ownedRelics.length; ri++) {
+                    const rl = ownedRelics[ri];
+                    const rx = 40 + (ri % 2) * (WIDTH/2 - 20);
+                    const ry = listY + Math.floor(ri/2) * 32;
+                    fillText(`${rl.icon} ${rl.name}`, rx, ry + 10, [200,220,255], 'bold 13px "Malgun Gothic", sans-serif', 'left');
+                    fillText(rl.desc, rx + 2, ry + 26, [130,160,200], '11px "Malgun Gothic", sans-serif', 'left');
+                }
+            } else {
+                fillText("아직 유물이 없습니다", WIDTH/2, listY + 16, [100,120,160], '13px "Malgun Gothic", sans-serif', 'center');
+            }
+
+            // Draw button
+            const ownedRows = Math.max(1, Math.ceil(ownedRelics.length / 2));
+            const btnY = listY + ownedRows * 32 + 16;
+            const btnH = 60;
+            let rbg, rbd;
+            if (relic_sel) { rbg = SHOP_HIGHLIGHT; rbd = [100,180,255]; }
+            else { rbg = [30,40,70]; rbd = [50,80,140]; }
+            fillRoundRect(24, btnY, WIDTH-48, btnH, 8, rbg);
+            strokeRoundRect(24, btnY, WIDTH-48, btnH, 8, rbd, 2);
+
+            if (allOwned) {
+                fillText('🎉 모든 유물 수집 완료!', WIDTH/2, btnY+34, [100,220,100], 'bold 18px "Malgun Gothic", sans-serif', 'center');
+            } else if (anteLimitReached) {
+                fillText('이번 앤티에서 이미 구매했습니다', WIDTH/2, btnY+28, [200,150,80], 'bold 16px "Malgun Gothic", sans-serif', 'center');
+                fillText('다음 앤티에서 다시 구매할 수 있습니다', WIDTH/2, btnY+48, [140,120,80], '12px "Malgun Gothic", sans-serif', 'center');
+            } else {
+                const r_txt_col = relic_sel ? [20,20,30] : WHITE;
+                const r_cost_col = relic_sel ? [20,20,30] : (can_relic ? GOLD_C : [120,80,80]);
+                fillText("🏺 유물 뽑기", 44, btnY+24, r_txt_col, 'bold 20px "Malgun Gothic", sans-serif', 'left');
+                fillText(`랜덤 영구 능력 획득 (${available.length}종 남음)`, 44, btnY+46, relic_sel ? [50,50,60] : [130,160,200], '13px "Malgun Gothic", sans-serif', 'left');
+                fillText(`${RELIC_COST}G`, WIDTH-68, btnY+24, r_cost_col, 'bold 20px "Malgun Gothic", sans-serif', 'right');
+            }
+
+            // All relics reference
+            const refY = btnY + btnH + 20;
+            fillText("유물 도감", 44, refY, [140,170,210], '13px "Malgun Gothic", sans-serif', 'left');
+            for (let ri = 0; ri < RELICS.length; ri++) {
+                const rl = RELICS[ri];
+                const rx = 40 + (ri % 2) * (WIDTH/2 - 20);
+                const ry = refY + 14 + Math.floor(ri/2) * 24;
+                const owned = !!this.relics[rl.id];
+                fillText(`${rl.icon} ${rl.name}`, rx, ry+10, owned ? [200,220,255] : [80,90,120], `${owned?'bold ':''}12px "Malgun Gothic", sans-serif`, 'left');
+            }
+        }
+
         // Key hints (non-mobile)
         if (!this._isMobile) {
             fillText("[ ←→ ] 탭  [ Space ] 뽑기  [ Enter 꾹 ] 다음", WIDTH/2, HEIGHT-18, [100,130,180], '13px "Malgun Gothic", sans-serif', 'center');
+        }
+
+        // === RELIC CHOICE OVERLAY (rendered over any tab) ===
+        if (this.relic_choices) {
+            ctx.fillStyle = 'rgba(0,0,0,0.75)';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            fillText('유물을 선택하세요!', WIDTH/2, 100, [100,180,255], 'bold 22px "Malgun Gothic", sans-serif', 'center');
+
+            const rcW = 150, rcH = 180, rcGap = 20;
+            const rcTotalW = this.relic_choices.length * rcW + (this.relic_choices.length - 1) * rcGap;
+            const rcStartX = WIDTH/2 - rcTotalW/2;
+
+            for (let ci = 0; ci < this.relic_choices.length; ci++) {
+                const rl = this.relic_choices[ci];
+                const cx = rcStartX + ci * (rcW + rcGap);
+                const cy = 130;
+                const isPick = (ci === this.relic_pick);
+
+                const cbg = isPick ? [40,60,120] : [25,35,60];
+                const cborder = isPick ? [100,180,255] : [50,70,110];
+                fillRoundRect(cx, cy, rcW, rcH, 12, cbg);
+                strokeRoundRect(cx, cy, rcW, rcH, 12, cborder, isPick ? 3 : 1);
+
+                if (isPick) {
+                    ctx.save();
+                    ctx.shadowColor = 'rgba(100,180,255,0.6)';
+                    ctx.shadowBlur = 20;
+                    fillRoundRect(cx, cy, rcW, rcH, 12, cbg);
+                    ctx.restore();
+                }
+
+                fillText(rl.icon, cx + rcW/2, cy + 50, WHITE, '40px "Malgun Gothic", sans-serif', 'center');
+                fillText(rl.name, cx + rcW/2, cy + 85, [220,240,255], 'bold 16px "Malgun Gothic", sans-serif', 'center');
+                fillText(rl.desc, cx + rcW/2, cy + 115, [150,180,220], '12px "Malgun Gothic", sans-serif', 'center');
+
+                if (isPick) {
+                    fillText('▲', cx + rcW/2, cy + rcH + 16, [100,180,255], 'bold 16px "Malgun Gothic", sans-serif', 'center');
+                }
+            }
+
+            const isMobileRC = ('ontouchstart' in window);
+            if (!isMobileRC) {
+                fillText('← → 선택  |  Space 확정', WIDTH/2, 340, [120,140,170], '12px "Malgun Gothic", sans-serif', 'center');
+            } else {
+                fillText('카드를 터치하여 선택', WIDTH/2, 340, [120,140,170], '14px "Malgun Gothic", sans-serif', 'center');
+            }
+        }
+
+        // Relic result popup
+        if (this.relic_result_timer > 0) {
+            const fade = Math.min(1, this.relic_result_timer / 30);
+            ctx.fillStyle = `rgba(0,0,30,${(0.63*fade).toFixed(2)})`;
+            ctx.fillRect(0,0,WIDTH,HEIGHT);
+
+            const rl = this.relic_result;
+            const popY = HEIGHT/2 - 60;
+            fillRoundRect(60, popY, WIDTH-120, 120, 12, [20,30,60]);
+            strokeRoundRect(60, popY, WIDTH-120, 120, 12, [100,180,255], 2);
+            fillText("유물 획득!", WIDTH/2, popY + 20, [100,180,255], 'bold 16px "Malgun Gothic", sans-serif', 'center');
+            fillText(`${rl.icon}`, WIDTH/2, popY + 55, WHITE, '36px "Malgun Gothic", sans-serif', 'center');
+            fillText(rl.name, WIDTH/2, popY + 80, [220,240,255], 'bold 20px "Malgun Gothic", sans-serif', 'center');
+            fillText(rl.desc, WIDTH/2, popY + 102, [150,180,220], '14px "Malgun Gothic", sans-serif', 'center');
         }
 
         // Gacha result popup
@@ -3059,7 +3315,7 @@ class PinballGame {
             const nrW2 = WIDTH * 0.45;
 
             // Buy/Draw button
-            const buyLabel = this.shop_tab === 0 ? "강화 뽑기" : (this.shop_tab === 1 ? "소모품 뽑기" : "공 뽑기");
+            const buyLabel = this.shop_tab === 0 ? "강화 뽑기" : (this.shop_tab === 1 ? "소모품 뽑기" : (this.shop_tab === 2 ? "공 뽑기" : "유물 뽑기"));
             fillRoundRect(10, HEIGHT-btnH-5, buyW, btnH-5, 8, [60,80,40]);
             strokeRoundRect(10, HEIGHT-btnH-5, buyW, btnH-5, 8, [120,180,80], 2);
             fillText(buyLabel, 10+buyW/2, HEIGHT-btnH+22, BALATRO_GOLD, 'bold 18px "Malgun Gothic",sans-serif', 'center');
@@ -3192,11 +3448,29 @@ class PinballGame {
                 return; // ignore all other touches, must pick a card
             }
 
+            // Relic choice overlay touch - must pick one
+            if (this.relic_choices) {
+                const rcW = 150, rcH = 180, rcGap = 20;
+                const rcTotalCW = this.relic_choices.length * rcW + (this.relic_choices.length - 1) * rcGap;
+                const rcStartCX = WIDTH/2 - rcTotalCW/2;
+                const rcy = 130;
+
+                for (let ci = 0; ci < this.relic_choices.length; ci++) {
+                    const cx = rcStartCX + ci * (rcW + rcGap);
+                    if (x >= cx && x <= cx + rcW && y >= rcy && y <= rcy + rcH) {
+                        this.relic_pick = ci;
+                        this._relic_pick_confirm();
+                        return;
+                    }
+                }
+                return; // ignore all other touches, must pick a card
+            }
+
             // Tab bar touch (y: 95 to 123)
-            const tabY = 95, tabH = 28, tabW = (WIDTH - 40) / 3;
+            const tabY = 95, tabH = 28, tabW = (WIDTH - 40) / 4;
             if (y >= tabY && y <= tabY + tabH) {
                 const ti = Math.floor((x - 20) / tabW);
-                if (ti >= 0 && ti < 3 && ti !== this.shop_tab) {
+                if (ti >= 0 && ti < 4 && ti !== this.shop_tab) {
                     this.shop_tab = ti;
                     this.shop_cursor = 0;
                 }
@@ -3226,7 +3500,13 @@ class PinballGame {
                 } else if (this.shop_tab === 1) {
                     this.shop_cursor = 0; // only 1 item (draw button)
                 } else if (this.shop_tab === 2) {
-                    this.shop_cursor = 0;
+                    // 3 slot cards: determine which slot was touched
+                    const slotH = 72, slotGap = 8;
+                    const relY = y - content_y;
+                    const slotIdx = Math.floor(relY / (slotH + slotGap));
+                    this.shop_cursor = Math.max(0, Math.min(2, slotIdx));
+                } else if (this.shop_tab === 3) {
+                    this.shop_cursor = 0; // only 1 item (draw button)
                 }
             }
             return;
@@ -3246,9 +3526,16 @@ class PinballGame {
                     if (slot >= 0 && slot < invLen) {
                         this.consumable_cursor = slot;
                         this._use_consumable(slot);
-                        if (this.consumable_inv.length === 0) this.consumable_open = false;
-                        else this.consumable_cursor = Math.min(this.consumable_cursor, this.consumable_inv.length - 1);
+                        if (this.consumable_inv.length > 0)
+                            this.consumable_cursor = Math.min(this.consumable_cursor, this.consumable_inv.length - 1);
                     }
+                    return;
+                }
+
+                // "메인 화면으로" button touch (y: 470~510)
+                if (y >= 470 && y <= 510 && x >= WIDTH/2 - 70 && x <= WIDTH/2 + 70) {
+                    this.consumable_open = false;
+                    this.state = 'menu';
                     return;
                 }
 
@@ -3259,14 +3546,14 @@ class PinballGame {
                 }
 
                 // Tap anywhere else to close
-                if (y < cardY2 - 20 || y > cardY2 + cardH + 80) {
+                if (y < cardY2 - 20 || y > cardY2 + cardH + 120) {
                     this.consumable_open = false;
                 }
                 return;
             }
 
             // Consumable box button touch (y: 40 ~ 68)
-            if (y >= 40 && y <= 68 && this.consumable_inv.length > 0) {
+            if (y >= 40 && y <= 68) {
                 const boxW = 80, boxX = WIDTH/2 - boxW/2;
                 if (x >= boxX && x <= boxX + boxW) {
                     this.consumable_open = true;
@@ -3386,11 +3673,12 @@ class PinballGame {
 // ============================================================
 const game = new PinballGame();
 
-// Query params: ?test=true&round=7&gold=100
+// Query params: ?test=true&round=7&gold=100&money=50
 const _urlParams = new URLSearchParams(window.location.search);
 if (_urlParams.get('test') === 'true') {
     game._testRound = parseInt(_urlParams.get('round')) || 1;
     game._testGold = parseInt(_urlParams.get('gold')) || 100;
+    game._testMoney = parseInt(_urlParams.get('money')) || 0;
     game._startTest();
 }
 
