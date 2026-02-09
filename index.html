@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -38,6 +38,34 @@ canvas { display: block; image-rendering: auto; }
 </head>
 <body>
 <canvas id="game"></canvas>
-<script src="bundle.4d14f8811b5c.js"></script>
+<script>window.__USE_BUNDLE__="bundle.af97bfbf1557.js";</script>
+<script>
+(function () {
+  if (window.__USE_BUNDLE__) {
+    var s = document.createElement('script');
+    s.src = window.__USE_BUNDLE__;
+    document.body.appendChild(s);
+    return;
+  }
+  if (location.protocol === 'file:') {
+    var msg = document.createElement('div');
+    msg.style.position = 'absolute';
+    msg.style.top = '50%';
+    msg.style.left = '50%';
+    msg.style.transform = 'translate(-50%, -50%)';
+    msg.style.color = '#fff';
+    msg.style.font = '16px "Malgun Gothic", sans-serif';
+    msg.style.textAlign = 'center';
+    msg.style.lineHeight = '1.6';
+    msg.textContent = '로컬 파일(file://)로는 실행할 수 없습니다.\n정적 서버로 실행해 주세요.';
+    document.body.appendChild(msg);
+    return;
+  }
+  var m = document.createElement('script');
+  m.type = 'module';
+  m.src = 'src/main.js';
+  document.body.appendChild(m);
+})();
+</script>
 </body>
 </html>
