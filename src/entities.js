@@ -154,10 +154,35 @@ class Ball {
             }
         }
 
+        // --- Evolution glow ---
+        const evoLv = bt ? (bt.evo_level || 0) : 0;
+        if (evoLv > 0) {
+            const glowR = BALL_R + 3 + evoLv * 2;
+            const pulse = Math.sin(t * 0.1) * 0.12;
+            ctx.fillStyle = rgba(main_c, 0.18 + pulse);
+            ctx.beginPath(); ctx.arc(this.x, this.y, glowR, 0, Math.PI*2); ctx.fill();
+            if (evoLv >= 2) {
+                ctx.fillStyle = rgba([255,255,200], 0.1 + pulse * 0.5);
+                ctx.beginPath(); ctx.arc(this.x, this.y, glowR + 5, 0, Math.PI*2); ctx.fill();
+                // Evolution ring
+                for (let k = 0; k < 6; k++) {
+                    const ang = t * 0.08 + k * Math.PI / 3;
+                    const rx = this.x + (glowR + 3) * Math.cos(ang);
+                    const ry = this.y + (glowR + 3) * Math.sin(ang);
+                    fillCircle(rx, ry, 1.5, [255,255,200]);
+                }
+            }
+        }
+
         // --- Main ball ---
         fillCircle(this.x, this.y, BALL_R, main_c);
         fillCircle(this.x-2, this.y-2, Math.max(1, Math.floor(BALL_R/3)), WHITE);
         strokeCircle(this.x, this.y, BALL_R, outline_c, 1);
+
+        // Evolution star indicator
+        if (evoLv > 0) {
+            strokeCircle(this.x, this.y, BALL_R + 1, [255,255,150], 1);
+        }
     }
 }
 

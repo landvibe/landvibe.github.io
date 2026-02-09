@@ -44,6 +44,15 @@ class PinballGame {
         this.current_ball_type = null; // alias for ball_slots[0]
         this.gacha_result = null; this.gacha_result_timer = 0;
 
+        // Ball evolution system
+        this.ball_evo = [0, 0, 0]; // evolution level per slot (0=stage1, 1=stage2, 2=stage3)
+        this.evo_round_drains = 0;
+        this.evo_total_gold = 0;
+        this.evo_last_bumper = null;
+        this.evo_same_bumper_count = 0;
+        this.evo_survival_frames = 0;
+        this.evo_ghost_drain_used = [false, false, false];
+
         // Relics (permanent passives)
         this.relics = {};
         this.relic_result = null; this.relic_result_timer = 0;
@@ -345,8 +354,8 @@ class PinballGame {
 
     _spawn_plunger() {
         const slotIdx = Math.min(this.ball_launch_index || 0, 2);
-        const ballType = this.ball_slots[slotIdx];
-        this.current_ball_type = ballType; // 글로벌 효과를 현재 공에 맞춤
+        const ballType = this._get_evolved_ball_type(slotIdx);
+        this.current_ball_type = ballType; // 글로벌 효과를 현재 공에 맞춤 (진화 반영)
         this.balls.push(new Ball(this.plunger.x, 720, 0, 0, ballType));
         this.ball_in_p = true;
     }
@@ -379,6 +388,68 @@ class PinballGame {
         this.lf.length = newLen; this.rf.length = newLen;
     }
 
+    _get_evolved_ball_type(slotIdx) {
+        const baseBall = this.ball_slots[slotIdx];
+        if (!baseBall) return null;
+        const evoData = typeof BALL_EVOLUTIONS !== 'undefined' ? BALL_EVOLUTIONS[baseBall.id] : null;
+        if (!evoData) return baseBall;
+        const level = this.ball_evo[slotIdx] || 0;
+        const stage = evoData[level];
+        if (!stage) return baseBall;
+        return {
+            ...baseBall,
+            name: stage.name,
+            desc: stage.desc,
+            color: stage.color,
+            trail: stage.trail,
+            effects: { ...stage.effects },
+            evo_level: level,
+            evo_icon: stage.icon,
+        };
+    }
+
+    _check_all_evolutions(trigger) {
+        if (typeof BALL_EVOLUTIONS === 'undefined') return;
+        let evolved = false;
+        for (let i = 0; i < 3; i++) {
+            const baseBall = this.ball_slots[i];
+            if (!baseBall) continue;
+            const evoData = BALL_EVOLUTIONS[baseBall.id];
+            if (!evoData) continue;
+            const curLevel = this.ball_evo[i] || 0;
+            if (curLevel >= 2) continue;
+            const next = evoData[curLevel + 1];
+            if (!next || !next.condition) continue;
+            let met = false;
+            switch (next.condition) {
+                case 'round_score_5000': met = trigger === 'score' && this.round_score >= 5000; break;
+                case 'boss_kill': met = trigger === 'boss_kill'; break;
+                case 'survive_round': met = trigger === 'round_clear' && this.evo_round_drains === 0; break;
+                case 'combo_10': met = trigger === 'combo' && this.combo >= 10; break;
+                case 'same_bumper_3': met = trigger === 'bumper' && this.evo_same_bumper_count >= 3; break;
+                case 'survive_20s': met = trigger === 'frame' && this.evo_survival_frames >= 1200; break;
+                case 'no_drain_clear': met = trigger === 'round_clear' && this.evo_round_drains === 0; break;
+                case 'total_gold_30': met = (trigger === 'gold' || trigger === 'frame' || trigger === 'round_clear') && this.gold >= 30; break;
+                case 'total_gold_100': met = (trigger === 'gold' || trigger === 'frame' || trigger === 'round_clear') && this.gold >= 100; break;
+            }
+            if (met) {
+                this.ball_evo[i] = curLevel + 1;
+                const newStage = evoData[curLevel + 1];
+                this.popups.push(new ScorePopup(WIDTH/2, HEIGHT/2 - 80, `⬆ ${newStage.name} 진화!`, [255,255,100]));
+                this._spawn_fx(WIDTH/2, HEIGHT/2 - 80, [255,220,100], 25, 5, 40, 4);
+                sndRoundClear();
+                evolved = true;
+            }
+        }
+        if (evolved) {
+            const activeSlot = Math.min(this.ball_launch_index || 0, 2);
+            this.current_ball_type = this._get_evolved_ball_type(activeSlot);
+            for (const ball of this.balls) {
+                if (ball.active) ball.ball_type = this.current_ball_type;
+            }
+        }
+    }
+
     _start() {
         this._testMode = false;
         this.score = 0; this.lives = 3;
@@ -392,6 +463,10 @@ class PinballGame {
         this.ball_slots = [null, null, null];
         this.current_ball_type = null;
         this.gacha_result = null; this.gacha_result_timer = 0;
+        this.ball_evo = [0, 0, 0];
+        this.evo_round_drains = 0; this.evo_total_gold = 0;
+        this.evo_last_bumper = null; this.evo_same_bumper_count = 0;
+        this.evo_survival_frames = 0; this.evo_ghost_drain_used = [false, false, false];
         this.relics = {};
         this.relic_result = null; this.relic_result_timer = 0;
         this.relic_choices = null; this.relic_pick = 0;
@@ -421,6 +496,10 @@ class PinballGame {
         this.ball_slots = [null, null, null];
         this.current_ball_type = null;
         this.gacha_result = null; this.gacha_result_timer = 0;
+        this.ball_evo = [0, 0, 0];
+        this.evo_round_drains = 0; this.evo_total_gold = 0;
+        this.evo_last_bumper = null; this.evo_same_bumper_count = 0;
+        this.evo_survival_frames = 0; this.evo_ghost_drain_used = [false, false, false];
         this.relics = {};
         this.relic_result = null; this.relic_result_timer = 0;
         this.relic_choices = null; this.relic_pick = 0;
@@ -472,6 +551,13 @@ class PinballGame {
         this.slow_time_timer = 0;
         this.combo_master = false;
 
+        // Reset per-round evolution tracking
+        this.evo_round_drains = 0;
+        this.evo_survival_frames = 0;
+        this.evo_ghost_drain_used = [false, false, false];
+        this.evo_last_bumper = null;
+        this.evo_same_bumper_count = 0;
+
         // Setup new map layout when ante changes (stage 1)
         if (this._get_stage() === 1 || this.round_num === 1) {
             this._setup_map(this._get_ante());
@@ -489,6 +575,8 @@ class PinballGame {
         this._reset_drops();
         this._spawn_plunger();
         this._apply_upgrades();
+        // Check gold evolution at round start (in case gold was already enough)
+        this._check_all_evolutions('gold');
     }
 
     _complete_round() {
@@ -510,6 +598,9 @@ class PinballGame {
             this.best_round = this.round_num;
             localStorage.setItem('pinball_best_round', this.best_round);
         }
+        this.evo_total_gold += this.gold_earned;
+        this._check_all_evolutions('round_clear');
+        this._check_all_evolutions('gold');
         sndRoundClear();
     }
 
@@ -525,6 +616,8 @@ class PinballGame {
         const combo_master_mult = this.combo_master ? 2.0 : 1.0;
         const relic_combo = this.relics.combo_anchor ? 1.5 : 1.0;
         this.combo++; this.combo_t = Math.floor(120*combo_ext*combo_master_mult*relic_combo);
+        this._check_all_evolutions('score');
+        this._check_all_evolutions('combo');
         if (this.score >= this.next_bonus && !this.bonus.active) {
             this.bonus.start(); this.next_bonus += this.bonus_th; sndBonus();
         }
@@ -682,7 +775,8 @@ class PinballGame {
         // Assign to selected slot (shop_cursor 0,1,2 in gacha tab)
         const slot = this.shop_cursor;
         this.ball_slots[slot] = chosen;
-        this.current_ball_type = this.ball_slots[0]; // main ball = slot 0
+        this.ball_evo[slot] = 0; // 새 공 뽑으면 진화 리셋
+        this.current_ball_type = this._get_evolved_ball_type(0); // main ball = slot 0 (진화 반영)
         this.gacha_result = chosen;
         this.gacha_result_timer = 180;
         sndRoundClear();
@@ -798,6 +892,25 @@ class PinballGame {
         const boss_grav = (this.boss && this.boss.debuff === 'gravity_up') ? 1.5 : 1.0;
         const ball_grav = this.gravity_val * (bt_eff.gravity_mult || 1.0) * slow_mult * boss_grav;
 
+        // Evolution: survival tracking
+        this.evo_survival_frames++;
+        this._check_all_evolutions('frame');
+
+        // Boss burn (fire evolution stage 3)
+        if (bt_eff.boss_burn && this.boss && this.boss.alive && this.t % 120 === 0) {
+            this.boss.hp--;
+            this.boss.hit_t = 12;
+            this._spawn_fx(this.boss.x, this.boss.y, [255,100,30], 10, 3, 20, 2);
+            this.popups.push(new ScorePopup(this.boss.x, this.boss.y - this.boss.r - 15, '🔥 화염!', [255,120,30]));
+            if (this.boss.hp <= 0) {
+                this.boss.alive = false; this.boss.death_t = 60;
+                this.boss_killed_gold = BOSS_GOLD_REWARD;
+                this.popups.push(new ScorePopup(this.boss.x, this.boss.y - 40, `+${BOSS_GOLD_REWARD}G BOSS!`, GOLD_C));
+                this._spawn_fx(this.boss.x, this.boss.y, [200,180,100], 30, 6, 40, 4);
+                this._check_all_evolutions('boss_kill');
+            }
+        }
+
         const drained = [];
         const split_spawns = [];
         for (const ball of this.balls) {
@@ -823,7 +936,13 @@ class PinballGame {
                 this.lf.angle = lf_prev + (lf_final - lf_prev) * st;
                 this.rf.angle = rf_prev + (rf_final - rf_prev) * st;
 
-                ball.step(tilt, sub_dt, ball_grav);
+                // Drain float (feather evolution): reduce gravity near drain
+                let stepGrav = ball_grav;
+                if (bt_eff.drain_float && ball.y > 650) {
+                    stepGrav *= Math.max(0.1, 1.0 - (ball.y - 650) / 150);
+                    if (ball.y > 720) ball.vy *= 0.96;
+                }
+                ball.step(tilt, sub_dt, stepGrav);
 
                 if (ball.collide_walls(WALLS)) sndWall();
 
@@ -840,11 +959,46 @@ class PinballGame {
                     this._spawn_fx(ball.x, ball.y, SHELL_P, 5, 2, 15, 2);
 
                 for (const bmp of this.bumpers) {
+                    const _pvx = ball.vx, _pvy = ball.vy;
                     if (bmp.collide_ball(ball)) {
+                        // Penetrate (ghost evolution): keep velocity, pass through
+                        if (bt_eff.penetrate) { ball.vx = _pvx; ball.vy = _pvy; }
                         const bmp_pts = Math.floor(bmp.pts * this.bumper_mult_val * (bt_eff.bumper_mult || 1.0));
                         this._add_score(bmp_pts, bmp.x, bmp.y - 20);
                         this._spawn_fx(ball.x, ball.y, bmp.style==='puffer'?PUFFER_Y:JELLY_P, 10, 4, 20, 3);
                         sndBump();
+                        // Same bumper tracking (heavy evolution)
+                        if (this.evo_last_bumper === bmp) this.evo_same_bumper_count++;
+                        else { this.evo_last_bumper = bmp; this.evo_same_bumper_count = 1; }
+                        this._check_all_evolutions('bumper');
+                        // Bumper explosion (fire evolution)
+                        if (bt_eff.bumper_explosion) {
+                            for (const ob of this.bumpers) {
+                                if (ob === bmp || ob.hit_t > 0) continue;
+                                if (Math.hypot(ob.x-bmp.x, ob.y-bmp.y) < bt_eff.bumper_explosion) {
+                                    this._add_score(Math.floor(ob.pts * this.bumper_mult_val * (bt_eff.bumper_mult||1.0) * 0.5), ob.x, ob.y-20);
+                                    ob.hit_t = 15;
+                                    this._spawn_fx(ob.x, ob.y, [255,150,50], 8, 3, 15, 2);
+                                }
+                            }
+                            this._spawn_fx(bmp.x, bmp.y, [255,120,30], 12, 5, 20, 3);
+                        }
+                        // Bumper shockwave (heavy evolution)
+                        if (bt_eff.bumper_shockwave) {
+                            for (const ob of this.bumpers) {
+                                if (ob === bmp || ob.hit_t > 0) continue;
+                                if (Math.hypot(ob.x-bmp.x, ob.y-bmp.y) < bt_eff.bumper_shockwave) {
+                                    this._add_score(Math.floor(ob.pts * this.bumper_mult_val * (bt_eff.bumper_mult||1.0) * 0.5), ob.x, ob.y-20);
+                                    ob.hit_t = 15;
+                                    this._spawn_fx(ob.x, ob.y, [180,160,140], 6, 3, 12, 2);
+                                }
+                            }
+                        }
+                        // Bumper gold drop (golden evolution)
+                        if (bt_eff.bumper_gold_drop) {
+                            this.round_bonus_gold += bt_eff.bumper_gold_drop;
+                            this.popups.push(new ScorePopup(bmp.x+15, bmp.y-30, `+${bt_eff.bumper_gold_drop}G`, GOLD_C));
+                        }
                         // +0.5 gold per jellyfish hit (jelly_bounty doubles it)
                         if (bmp.style === 'jelly') {
                             const jellyGold = 0.5 * (this.relics.jelly_bounty ? 2 : 1);
@@ -861,14 +1015,22 @@ class PinballGame {
                 if (this.boss && this.boss.alive) {
                     if (this.boss.collide_ball(ball)) {
                         this._spawn_fx(ball.x, ball.y, [120,100,60], 8, 3, 18, 2);
+                        // Boss damage multiplier (heavy evolution)
+                        const extraHits = Math.max(0, Math.floor(bt_eff.boss_damage_mult || 1.0) - 1);
+                        for (let eh = 0; eh < extraHits && this.boss.hp > 0; eh++) {
+                            this.boss.hp--;
+                            if (this.boss.hp <= 0) { this.boss.alive = false; this.boss.death_t = 60; }
+                        }
+                        const totalDmg = 1 + extraHits;
                         this.popups.push(new ScorePopup(this.boss.x, this.boss.y - this.boss.r - 25,
-                            `HP -1 (${this.boss.hp}/${this.boss.max_hp})`, [255, 200, 80]));
+                            `HP -${totalDmg} (${this.boss.hp}/${this.boss.max_hp})`, [255, 200, 80]));
                         sndBump();
                         if (!this.boss.alive) {
                             // Boss defeated!
                             this.boss_killed_gold = BOSS_GOLD_REWARD;
                             this.popups.push(new ScorePopup(this.boss.x, this.boss.y - 40, `+${BOSS_GOLD_REWARD}G BOSS!`, GOLD_C));
                             this._spawn_fx(this.boss.x, this.boss.y, [200,180,100], 30, 6, 40, 4);
+                            this._check_all_evolutions('boss_kill');
                         }
                     }
                 }
@@ -955,7 +1117,16 @@ class PinballGame {
                 this._spawn_fx(WIDTH/2, HEIGHT - 40, [100,255,200], 20, 4, 30, 4);
                 this.popups.push(new ScorePopup(WIDTH/2, HEIGHT - 60, '🛡️ 방어막!', [100,255,200]));
                 // skip life loss
+            } else if (bt_eff.evo_drain_save && !this.evo_ghost_drain_used[Math.min(this.ball_launch_index || 0, 2)]) {
+                // Ghost evolution: prevent first drain per round
+                this.evo_ghost_drain_used[Math.min(this.ball_launch_index || 0, 2)] = true;
+                this._spawn_plunger();
+                this._spawn_fx(WIDTH/2, HEIGHT - 40, [160,180,255], 20, 4, 30, 4);
+                this.popups.push(new ScorePopup(WIDTH/2, HEIGHT - 60, '👻 유령 보호!', [160,180,255]));
+                // skip life loss
             } else {
+            this.evo_round_drains++;
+            this.evo_survival_frames = 0;
             this.lives--;
             this.ball_launch_index++; // 다음 공 슬롯으로
             sndDrain();
@@ -1104,12 +1275,17 @@ class PinballGame {
             fillCircle(lx+i*12, b_y+11, 1, WHITE);
         }
 
-        // Ball type
+        // Ball type + evolution
         const cbt = this.current_ball_type;
         const b_name = cbt ? cbt.name : "기본 공";
         const b_col = cbt ? cbt.color : PEARL;
+        const evoLv = cbt && cbt.evo_level ? cbt.evo_level : 0;
         fillCircle(200, b_y+11, 5, b_col);
-        fillText(b_name, 210, b_y+15, WHITE, '14px "Malgun Gothic", sans-serif', 'left');
+        if (evoLv > 0) {
+            strokeCircle(200, b_y+11, 7, [255,255,100], 1);
+        }
+        const evoStars = evoLv > 0 ? ' ' + '★'.repeat(evoLv) : '';
+        fillText(b_name + evoStars, 210, b_y+15, evoLv > 0 ? [255,255,100] : WHITE, '14px "Malgun Gothic", sans-serif', 'left');
 
         // Multiplier
         const t_mult = this.multi * this.base_multi;
@@ -1263,6 +1439,7 @@ class PinballGame {
 
         // Status icons on right side
         {
+            const bt_eff = (this.current_ball_type || {}).effects || {};
             let iy = 55;
             if (this.shield_count > 0) {
                 fillText(`🛡️x${this.shield_count}`, WIDTH - 10, iy, [100,255,200], '13px "Malgun Gothic", sans-serif', 'right');
@@ -1271,6 +1448,32 @@ class PinballGame {
             if (this.combo_master) {
                 fillText('🔥콤보+', WIDTH - 10, iy, [255,160,60], '13px "Malgun Gothic", sans-serif', 'right');
                 iy += 18;
+            }
+            // Evolution active effects
+            if (bt_eff.bumper_explosion) {
+                fillText('💥폭발', WIDTH - 10, iy, [255,150,50], '11px "Malgun Gothic", sans-serif', 'right');
+                iy += 16;
+            }
+            if (bt_eff.boss_burn) {
+                fillText('🔥화염', WIDTH - 10, iy, [255,120,30], '11px "Malgun Gothic", sans-serif', 'right');
+                iy += 16;
+            }
+            if (bt_eff.evo_drain_save) {
+                const slotUsed = this.evo_ghost_drain_used[Math.min(this.ball_launch_index||0,2)];
+                fillText(slotUsed ? '👻(사용됨)' : '👻보호', WIDTH - 10, iy, slotUsed ? [100,100,130] : [160,180,255], '11px "Malgun Gothic", sans-serif', 'right');
+                iy += 16;
+            }
+            if (bt_eff.penetrate) {
+                fillText('💀관통', WIDTH - 10, iy, [120,100,255], '11px "Malgun Gothic", sans-serif', 'right');
+                iy += 16;
+            }
+            if (bt_eff.drain_float) {
+                fillText('☁️부양', WIDTH - 10, iy, [200,220,255], '11px "Malgun Gothic", sans-serif', 'right');
+                iy += 16;
+            }
+            if (bt_eff.bumper_shockwave) {
+                fillText('☄️충격파', WIDTH - 10, iy, [200,100,50], '11px "Malgun Gothic", sans-serif', 'right');
+                iy += 16;
             }
         }
 
@@ -1725,7 +1928,7 @@ class PinballGame {
             let slotY = content_y;
             for (let si = 0; si < 3; si++) {
                 const sel = (this.shop_cursor === si);
-                const sbt = this.ball_slots[si];
+                const sbt = this._get_evolved_ball_type(si);
                 let sbg, sbd;
                 if (sel) { sbg = SHOP_HIGHLIGHT; sbd = [100,180,255]; }
                 else { sbg = [20,30,50]; sbd = [40,60,100]; }
@@ -1742,12 +1945,23 @@ class PinballGame {
 
                 // Ball info
                 if (sbt) {
+                    const evoLv = sbt.evo_level || 0;
                     fillCircle(52, slotY+46, 12, sbt.color);
                     fillCircle(49, slotY+43, 4, WHITE);
                     strokeCircle(52, slotY+46, 12, lerp_col(sbt.color, BLACK, 0.3), 2);
+                    if (evoLv > 0) strokeCircle(52, slotY+46, 14, [255,255,100], 1);
                     const rc = RARITY_COLORS[sbt.rarity];
-                    fillText(`[${sbt.rarity_name}] ${sbt.name}`, 72, slotY+42, rc, 'bold 14px "Malgun Gothic", sans-serif', 'left');
-                    fillText(sbt.desc, 72, slotY+60, sel ? [40,50,70] : [150,180,220], '12px "Malgun Gothic", sans-serif', 'left');
+                    const evoStars = evoLv > 0 ? ' ' + '★'.repeat(evoLv) : '';
+                    fillText(`[${sbt.rarity_name}] ${sbt.name}${evoStars}`, 72, slotY+42, evoLv > 0 ? [255,255,100] : rc, 'bold 14px "Malgun Gothic", sans-serif', 'left');
+                    fillText(sbt.desc, 72, slotY+56, sel ? [40,50,70] : [150,180,220], '11px "Malgun Gothic", sans-serif', 'left');
+                    // Evolution next info
+                    if (evoLv < 2 && typeof BALL_EVOLUTIONS !== 'undefined') {
+                        const baseId = this.ball_slots[si] ? this.ball_slots[si].id : null;
+                        const nextEvo = baseId && BALL_EVOLUTIONS[baseId] ? BALL_EVOLUTIONS[baseId][evoLv + 1] : null;
+                        if (nextEvo) fillText(`다음: ${nextEvo.name} (${nextEvo.condDesc})`, 72, slotY+68, sel ? [60,60,80] : [100,130,170], '9px "Malgun Gothic", sans-serif', 'left');
+                    } else if (evoLv >= 2) {
+                        fillText('MAX 진화', 72, slotY+68, [255,220,100], '9px "Malgun Gothic", sans-serif', 'left');
+                    }
                 } else {
                     fillCircle(52, slotY+46, 12, PEARL);
                     fillCircle(49, slotY+43, 4, WHITE);
@@ -2075,6 +2289,31 @@ class PinballGame {
                     ctx.beginPath(); ctx.arc(fx, fy, 3, 0, Math.PI*2); ctx.fill();
                     ctx.fillStyle = rgba([220,240,255], 0.12);
                     ctx.beginPath(); ctx.arc(fx, fy, 6, 0, Math.PI*2); ctx.fill();
+                }
+            }
+
+            // Drain float zone (feather evolution)
+            if (bt_eff_draw.drain_float) {
+                const pulse2 = (12 + 8*Math.sin(this.t*0.06))/255;
+                ctx.fillStyle = rgba([200,230,255], pulse2);
+                ctx.fillRect(30, 650, TABLE_R-30, HEIGHT-650);
+                for (let yy=660; yy<HEIGHT-10; yy+=15) {
+                    const wave2 = Math.sin(this.t*0.1+yy*0.04)*10;
+                    ctx.fillStyle = rgba([230,245,255], 0.15);
+                    ctx.beginPath(); ctx.arc(120+wave2, yy, 3, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(350-wave2, yy, 3, 0, Math.PI*2); ctx.fill();
+                }
+            }
+
+            // Boss burn effect overlay
+            if (bt_eff_draw.boss_burn && this.boss && this.boss.alive) {
+                const burnPulse = Math.sin(this.t * 0.15) * 0.5 + 0.5;
+                ctx.fillStyle = rgba([255,80,20], 0.04 + burnPulse * 0.03);
+                ctx.beginPath(); ctx.arc(this.boss.x, this.boss.y, this.boss.r + 15, 0, Math.PI*2); ctx.fill();
+                for (let k=0; k<4; k++) {
+                    const fa = this.t * 0.08 + k * Math.PI / 2;
+                    const fr = this.boss.r + 8 + Math.sin(this.t*0.12+k)*5;
+                    fillCircle(this.boss.x + fr*Math.cos(fa), this.boss.y + fr*Math.sin(fa), 2+burnPulse, [255,120,30]);
                 }
             }
 

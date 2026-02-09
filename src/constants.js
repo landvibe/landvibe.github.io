@@ -125,3 +125,34 @@ const BALL_TYPES = [
     {id:'split',name:'분열 공',desc:'범퍼 충돌 시 20% 확률로 분열',rarity:2,rarity_name:'전설',color:[180,100,255],trail:[150,70,230],weight:5,effects:{split_chance:0.2}},
     {id:'ghost',name:'유령 공',desc:'슬링샷 무시, 신비로운 궤적',rarity:2,rarity_name:'전설',color:[200,220,255],trail:[160,180,220],weight:4,effects:{ghost:true}},
 ];
+
+// ============================================================
+//  BALL EVOLUTIONS (진화 트리)
+// ============================================================
+const BALL_EVOLUTIONS = {
+    fire: [
+        { name: '불꽃 공', desc: '모든 점수 +30%', icon: '🔥', color: [255,120,60], trail: [255,80,30], effects: { score_mult: 1.3 } },
+        { name: '화염 공', desc: '점수 +40%, 범퍼 소폭발', icon: '🔥', color: [255,60,10], trail: [255,30,0], effects: { score_mult: 1.4, bumper_explosion: 60 }, condition: 'round_score_5000', condDesc: '라운드 점수 5,000' },
+        { name: '태양 공', desc: '점수 +50%, 대폭발, 화염', icon: '☀️', color: [255,200,50], trail: [255,160,20], effects: { score_mult: 1.5, bumper_explosion: 120, boss_burn: true }, condition: 'boss_kill', condDesc: '보스 처치' },
+    ],
+    ghost: [
+        { name: '유령 공', desc: '슬링샷 무시', icon: '👻', color: [200,220,255], trail: [160,180,220], effects: { ghost: true } },
+        { name: '망령 공', desc: '슬링샷 무시 + 드레인 1회 무시', icon: '👻', color: [160,180,255], trail: [120,140,220], effects: { ghost: true, evo_drain_save: true }, condition: 'survive_round', condDesc: '한 라운드 노드레인' },
+        { name: '원혼 공', desc: '드레인 무시 + 관통 효과', icon: '💀', color: [120,100,255], trail: [80,60,220], effects: { ghost: true, evo_drain_save: true, penetrate: true }, condition: 'combo_10', condDesc: '10콤보 달성' },
+    ],
+    heavy: [
+        { name: '무거운 공', desc: '범퍼 점수 +25%', icon: '⚙️', color: [180,160,140], trail: [150,130,110], effects: { bumper_mult: 1.25 } },
+        { name: '강철 공', desc: '범퍼 +35%, 보스 1.5배', icon: '⚙️', color: [160,170,190], trail: [130,140,170], effects: { bumper_mult: 1.35, boss_damage_mult: 1.5 }, condition: 'same_bumper_3', condDesc: '동일 범퍼 3연속' },
+        { name: '운석 공', desc: '범퍼 +50%, 충격파, 보스 2배', icon: '☄️', color: [200,100,50], trail: [180,70,20], effects: { bumper_mult: 1.5, boss_damage_mult: 2.0, bumper_shockwave: 80 }, condition: 'boss_kill', condDesc: '보스 처치' },
+    ],
+    feather: [
+        { name: '깃털 공', desc: '중력 -20%', icon: '🍃', color: [220,240,255], trail: [180,210,255], effects: { gravity_mult: 0.8 } },
+        { name: '거품 공', desc: '중력 -30%', icon: '🫧', color: [200,230,250], trail: [170,200,240], effects: { gravity_mult: 0.7 }, condition: 'survive_20s', condDesc: '20초 드레인 없이 생존' },
+        { name: '구름 공', desc: '중력 -45%, 부양 효과', icon: '☁️', color: [230,240,255], trail: [200,220,250], effects: { gravity_mult: 0.55, drain_float: true }, condition: 'no_drain_clear', condDesc: '노드레인 라운드 클리어' },
+    ],
+    golden: [
+        { name: '황금 공', desc: '점수 x1.5, 골드 x2', icon: '💰', color: [255,220,50], trail: [255,200,30], effects: { score_mult: 1.5, gold_mult: 2.0 } },
+        { name: '백금 공', desc: '점수 x2, 골드 x2.5', icon: '💎', color: [220,230,250], trail: [200,215,240], effects: { score_mult: 2.0, gold_mult: 2.5 }, condition: 'total_gold_30', condDesc: '누적 골드 30G' },
+        { name: '다이아몬드 공', desc: '점수 x2.5, 골드 x3.5, 추가 골드', icon: '💠', color: [180,230,255], trail: [150,210,250], effects: { score_mult: 2.5, gold_mult: 3.5, bumper_gold_drop: 0.3 }, condition: 'total_gold_100', condDesc: '누적 골드 100G' },
+    ],
+};
