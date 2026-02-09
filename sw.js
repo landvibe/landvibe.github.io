@@ -1,17 +1,19 @@
-const CACHE_NAME = 'ocean-pinball-v15';
+﻿const CACHE_NAME = 'ocean-pinball-v16';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './bundle.e38d518ab001.js'
 ];
 
 // Install: cache all assets
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS))
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    await Promise.allSettled(ASSETS.map(asset => cache.add(asset)));
+  })());
   self.skipWaiting();
 });
 
@@ -64,3 +66,4 @@ self.addEventListener('fetch', event => {
     return cached || fetched;
   })());
 });
+
