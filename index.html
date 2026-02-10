@@ -31,14 +31,40 @@
 <meta name="keywords" content="핀볼, 핀볼 게임, 로그라이크, 바다 핀볼, ocean pinball, 웹 게임, PWA 게임">
 <meta name="author" content="Ocean Pinball">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #0a0a1a; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-canvas { display: block; image-rendering: auto; }
-</style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        background-color: #2B4F70;
+        /* Casual Bubble Pattern (Calm Ocean) */
+        background-image: 
+            radial-gradient(rgba(255, 255, 255, 0.1) 2px, transparent 3px),
+            radial-gradient(rgba(255, 255, 255, 0.05) 2px, transparent 3px),
+            linear-gradient(180deg, #4A90E2 0%, #2B4F70 100%);
+        background-size: 50px 50px, 50px 50px, 100% 100%;
+        background-position: 0 0, 25px 25px, 0 0;
+        
+        display: flex; 
+        justify-content: center; 
+        align-items: center; 
+        height: 100vh; 
+        overflow: hidden; 
+        touch-action: none; 
+        -webkit-touch-callout: none; 
+        -webkit-user-select: none; 
+        user-select: none; 
+    }
+    canvas { 
+        display: block; 
+        image-rendering: auto;
+        /* Soft Shadow & White Border */
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        border: 4px solid #e0e0e0;
+        border-radius: 8px;
+    }
+    </style>
 </head>
 <body>
 <canvas id="game"></canvas>
-<script>window.__USE_BUNDLE__="bundle.f10952bab965.js";</script>
+<script>window.__USE_BUNDLE__="bundle.83af4500e731.js";</script>
 <script>
 (function () {
   if (window.__USE_BUNDLE__) {
