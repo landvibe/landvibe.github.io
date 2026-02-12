@@ -60,20 +60,60 @@
         border: 4px solid #e0e0e0;
         border-radius: 8px;
     }
+    .hidden {
+        display: none !important;
+    }
+    #loading-screen {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 14px;
+        color: #ffffff;
+        font: 600 15px "Malgun Gothic", sans-serif;
+    }
+    .spinner {
+        width: 52px;
+        height: 52px;
+        border: 4px solid rgba(255, 255, 255, 0.35);
+        border-top-color: #ffffff;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
     </style>
 </head>
 <body>
-<canvas id="game"></canvas>
-<script>window.__USE_BUNDLE__="bundle.c51dc89783ba.js";</script>
+<div id="loading-screen">
+  <div class="spinner" aria-hidden="true"></div>
+  <div>LOADING...</div>
+</div>
+<canvas id="game" class="hidden"></canvas>
+<script>window.__USE_BUNDLE__="bundle.bae93a5e9164.js";</script>
 <script>
 (function () {
+  var loadingScreen = document.getElementById('loading-screen');
+  var gameCanvas = document.getElementById('game');
+
+  function showGameCanvas() {
+    if (loadingScreen) loadingScreen.classList.add('hidden');
+    if (gameCanvas) gameCanvas.classList.remove('hidden');
+  }
+
   if (window.__USE_BUNDLE__) {
     var s = document.createElement('script');
     s.src = window.__USE_BUNDLE__;
+    s.onload = showGameCanvas;
     document.body.appendChild(s);
     return;
   }
   if (location.protocol === 'file:') {
+    if (loadingScreen) loadingScreen.classList.add('hidden');
     var msg = document.createElement('div');
     msg.style.position = 'absolute';
     msg.style.top = '50%';
@@ -90,6 +130,7 @@
   var m = document.createElement('script');
   m.type = 'module';
   m.src = 'src/main.js';
+  m.onload = showGameCanvas;
   document.body.appendChild(m);
 })();
 </script>
