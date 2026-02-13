@@ -5,7 +5,7 @@ const ASSETS = [
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
-  './bundle.f1ebdd2e47e2.js'
+  './bundle.fd7ae30870e7.js'
 ];
 
 // Install: cache all assets
