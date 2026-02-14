@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>범퍼 어드민</title>
+  <style>
+    :root {
+      --bg: #0a1220;
+      --panel: #142640;
+      --line: #2f4d73;
+      --text: #e7f3ff;
+      --muted: #9cb8d6;
+      --accent: #7fd2ff;
+      --danger: #ff7a7a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Malgun Gothic", sans-serif;
+      background: radial-gradient(circle at 20% 20%, #153b5a, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 14px;
+    }
+    .wrap { max-width: 1020px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .help { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    @media (min-width: 940px) {
+      .grid { grid-template-columns: 1fr 320px 320px; }
+    }
+    .card {
+      background: rgba(20, 38, 64, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    canvas {
+      width: 100%;
+      max-width: 500px;
+      aspect-ratio: 5 / 8;
+      border: 1px solid #38608f;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #123a5a 0%, #0b2238 46%, #0a1728 100%);
+      touch-action: none;
+      display: block;
+      margin: 0 auto;
+    }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+    .row > * { flex: 1; }
+    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 3px; }
+    input, select, button {
+      width: 100%;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid #4f7096;
+      background: #0f2137;
+      color: var(--text);
+      font-size: 14px;
+    }
+    button { cursor: pointer; background: #1a3e64; }
+    button:hover { filter: brightness(1.08); }
+    button.danger { border-color: #b85c5c; background: #5b2a2a; }
+    button.primary { background: #1d5a86; border-color: #5db4ee; }
+    .stat { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .links { display: flex; gap: 8px; margin-top: 10px; }
+    .links a {
+      flex: 1;
+      text-align: center;
+      text-decoration: none;
+      background: #243b55;
+      color: var(--text);
+      border: 1px solid #466283;
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 13px;
+    }
+    .preview {
+      width: 100%;
+      height: min(680px, 75vh);
+      border: 1px solid #3f638d;
+      border-radius: 10px;
+      background: #061321;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>라운드 범퍼 어드민</h1>
+    <div class="help">캔버스 빈 공간 탭: 범퍼 추가 / 기존 범퍼 드래그: 위치 수정 / 선택 후 삭제 가능 / 저장: maps.json 다운로드</div>
+
+    <div class="grid">
+      <div class="card">
+        <canvas id="mapCanvas" width="500" height="800"></canvas>
+        <div class="stat" id="mapStat">로딩 중...</div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>라운드</label>
+            <select id="roundSelect"></select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label>추가 범퍼 타입</label>
+            <select id="typeSelect"></select>
+          </div>
+        </div>
+        <div class="row">
+          <button id="deleteBtn" class="danger">선택 범퍼 삭제</button>
+        </div>
+        <div class="row">
+          <button id="saveBtn" class="primary">maps.json 저장</button>
+        </div>
+
+        <div class="links">
+          <a href="./index.html?test=true">테스트 페이지로</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <button id="refreshPreviewBtn">실제 게임 미리보기 갱신</button>
+        </div>
+        <iframe id="gamePreview" class="preview" title="실제 게임 미리보기"></iframe>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const WIDTH = 500;
+    const HEIGHT = 800;
+    const FISH_COL = [
+      [255, 180, 120],
+      [120, 220, 255],
+      [255, 130, 170],
+      [170, 255, 140],
+      [210, 200, 255],
+    ];
+    const BUMPER_TYPES = [
+      { id: 'puffer', radius: 22, color: '#ffc54d' },
+      { id: 'jelly', radius: 22, color: '#ff8ad8' },
+      { id: 'crab', radius: 22, color: '#ff7355' },
+      { id: 'octopus', radius: 22, color: '#b08cff' },
+      { id: 'squid', radius: 22, color: '#f5c467' },
+      { id: 'turtle', radius: 22, color: '#87e17d' },
+      { id: 'clam', radius: 24, color: '#f4dfaa' },
+      { id: 'anchovy', radius: 48, color: '#94c4ff' },
+    ];
+
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    const roundSelect = document.getElementById('roundSelect');
+    const typeSelect = document.getElementById('typeSelect');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const mapStat = document.getElementById('mapStat');
+    const refreshPreviewBtn = document.getElementById('refreshPreviewBtn');
+    const gamePreview = document.getElementById('gamePreview');
+
+    let mapsData = { maps: [] };
+    let selectedIdx = -1;
+    let dragIdx = -1;
+    let dragPointerId = null;
+    let previewTimer = null;
+
+    function typeInfo(typeId) {
+      return BUMPER_TYPES.find(t => t.id === typeId) || BUMPER_TYPES[0];
+    }
+
+    function persistOverrideMaps() {
+      try {
+        localStorage.setItem('pinball_maps_override', JSON.stringify(mapsData));
+      } catch (_) {}
+    }
+
+    function refreshPreview() {
+      persistOverrideMaps();
+      const round = Number(roundSelect.value) || 1;
+      gamePreview.src = `./index.html?test=true&round=${round}&gold=0&nosw=1&useMapOverride=1`;
+    }
+
+    function refreshPreviewDebounced() {
+      if (previewTimer) clearTimeout(previewTimer);
+      previewTimer = setTimeout(() => {
+        previewTimer = null;
+        refreshPreview();
+      }, 180);
+    }
+
+    function pathRoundRect(x, y, w, h, r) {
+      const rr = Math.max(0, Math.min(r, Math.min(w, h) * 0.5));
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.lineTo(x + w - rr, y);
+      ctx.arcTo(x + w, y, x + w, y + rr, rr);
+      ctx.lineTo(x + w, y + h - rr);
+      ctx.arcTo(x + w, y + h, x + w - rr, y + h, rr);
+      ctx.lineTo(x + rr, y + h);
+      ctx.arcTo(x, y + h, x, y + h - rr, rr);
+      ctx.lineTo(x, y + rr);
+      ctx.arcTo(x, y, x + rr, y, rr);
+      ctx.closePath();
+    }
+
+    function ensureMapShape() {
+      if (!Array.isArray(mapsData.maps)) mapsData.maps = [];
+      while (mapsData.maps.length < 8) {
+        mapsData.maps.push({
+          bumpersByStage: [[], [], []],
+          clams: [],
+          drops: [[130, 430, 0, 200], [190, 415, 1, 200], [250, 400, 2, 200], [310, 415, 3, 200], [370, 430, 4, 200]],
+          spinner: [250, 470],
+          pin: [250, 755, 5, 50],
+        });
+      }
+      for (const m of mapsData.maps) {
+        if (!Array.isArray(m.bumpersByStage)) m.bumpersByStage = [[], [], []];
+        while (m.bumpersByStage.length < 3) m.bumpersByStage.push([]);
+        if (!Array.isArray(m.drops)) {
+          m.drops = [[130, 430, 0, 200], [190, 415, 1, 200], [250, 400, 2, 200], [310, 415, 3, 200], [370, 430, 4, 200]];
+        }
+        if (!Array.isArray(m.spinner)) m.spinner = [250, 470];
+        if (!Array.isArray(m.pin)) m.pin = [250, 755, 5, 50];
+      }
+    }
+
+    function getCurrentRoundInfo() {
+      const roundNum = Math.max(1, Number(roundSelect.value) || 1);
+      const ante = Math.floor((roundNum - 1) / 3) + 1;
+      const stage = ((roundNum - 1) % 3) + 1;
+      return {
+        roundNum,
+        ante,
+        stage,
+        anteIdx: ante - 1,
+        stageIdx: stage - 1,
+      };
+    }
+
+    function getCurrentBumpers() {
+      ensureMapShape();
+      const info = getCurrentRoundInfo();
+      return mapsData.maps[info.anteIdx].bumpersByStage[info.stageIdx];
+    }
+
+    function toCanvasPos(evt) {
+      const rect = canvas.getBoundingClientRect();
+      const sx = canvas.width / rect.width;
+      const sy = canvas.height / rect.height;
+      return {
+        x: (evt.clientX - rect.left) * sx,
+        y: (evt.clientY - rect.top) * sy
+      };
+    }
+
+    function findBumperIndex(x, y) {
+      const bumpers = getCurrentBumpers();
+      for (let i = bumpers.length - 1; i >= 0; i--) {
+        const [bx, by, br] = bumpers[i];
+        const dx = x - bx;
+        const dy = y - by;
+        if (Math.hypot(dx, dy) <= br + 8) return i;
+      }
+      return -1;
+    }
+
+    function clampPos(x, y, r) {
+      const minX = 20 + r;
+      const maxX = WIDTH - 20 - r;
+      const minY = 90 + r;
+      const maxY = HEIGHT - 105 - r;
+      return {
+        x: Math.max(minX, Math.min(maxX, x)),
+        y: Math.max(minY, Math.min(maxY, y)),
+      };
+    }
+
+    function drawPlayfield() {
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+      ctx.fillStyle = 'rgba(16,40,66,0.92)';
+      pathRoundRect(16, 86, WIDTH - 32, HEIGHT - 186, 18);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(112,162,210,0.75)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      const info = getCurrentRoundInfo();
+      const m = mapsData.maps[info.anteIdx] || null;
+      if (m && Array.isArray(m.spinner)) {
+        const [sx, sy] = m.spinner;
+        ctx.strokeStyle = 'rgba(255,210,130,0.8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 14, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255,210,130,0.45)';
+        ctx.fillRect(sx - 2, sy - 11, 4, 22);
+      }
+
+      if (m && Array.isArray(m.drops)) {
+        for (const d of m.drops) {
+          const di = Number(d[2]);
+          const c = FISH_COL[di] || FISH_COL[0];
+          ctx.fillStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, 0.85)`;
+          ctx.fillRect(d[0] - 6, d[1] - 8, 12, 16);
+        }
+      }
+
+      const bumpers = getCurrentBumpers();
+      for (let i = 0; i < bumpers.length; i++) {
+        const b = bumpers[i];
+        const [x, y, r, type] = b;
+        const info = typeInfo(type);
+
+        ctx.beginPath();
+        ctx.fillStyle = info.color;
+        ctx.globalAlpha = i === selectedIdx ? 0.95 : 0.78;
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = i === selectedIdx ? '#ffffff' : 'rgba(30,55,85,0.9)';
+        ctx.lineWidth = i === selectedIdx ? 3 : 2;
+        ctx.stroke();
+
+        ctx.fillStyle = '#0d1d30';
+        ctx.font = 'bold 11px "Malgun Gothic", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(type, x, y + 4);
+      }
+
+      mapStat.textContent = `라운드 ${info.roundNum} (${info.ante}엔티 ${info.stage}스테이지) · 범퍼 ${bumpers.length}개`;
+    }
+
+    function syncInputFromSelected() {
+      const bumpers = getCurrentBumpers();
+      const sel = bumpers[selectedIdx];
+      if (!sel) return;
+      typeSelect.value = sel[3];
+    }
+
+    function handleDown(evt) {
+      evt.preventDefault();
+      canvas.setPointerCapture(evt.pointerId);
+      const { x, y } = toCanvasPos(evt);
+      const idx = findBumperIndex(x, y);
+      const bumpers = getCurrentBumpers();
+
+      if (idx >= 0) {
+        selectedIdx = idx;
+        dragIdx = idx;
+        dragPointerId = evt.pointerId;
+        syncInputFromSelected();
+      } else {
+        const t = typeInfo(typeSelect.value);
+        const r = t.radius;
+        const p = clampPos(x, y, r);
+        bumpers.push([Math.round(p.x), Math.round(p.y), r, t.id]);
+        selectedIdx = bumpers.length - 1;
+      }
+      drawPlayfield();
+      refreshPreviewDebounced();
+    }
+
+    function handleMove(evt) {
+      if (dragIdx < 0 || dragPointerId !== evt.pointerId) return;
+      evt.preventDefault();
+      const bumpers = getCurrentBumpers();
+      const b = bumpers[dragIdx];
+      if (!b) return;
+      const p = toCanvasPos(evt);
+      const clamped = clampPos(p.x, p.y, b[2]);
+      b[0] = Math.round(clamped.x);
+      b[1] = Math.round(clamped.y);
+      drawPlayfield();
+      refreshPreviewDebounced();
+    }
+
+    function handleUp(evt) {
+      if (dragPointerId !== evt.pointerId) return;
+      dragIdx = -1;
+      dragPointerId = null;
+    }
+
+    function deleteSelected() {
+      const bumpers = getCurrentBumpers();
+      if (selectedIdx < 0 || selectedIdx >= bumpers.length) return;
+      bumpers.splice(selectedIdx, 1);
+      selectedIdx = Math.min(selectedIdx, bumpers.length - 1);
+      drawPlayfield();
+      refreshPreviewDebounced();
+    }
+
+    function applySelectedType() {
+      const bumpers = getCurrentBumpers();
+      if (selectedIdx < 0 || selectedIdx >= bumpers.length) return;
+      const b = bumpers[selectedIdx];
+      const t = typeInfo(typeSelect.value);
+      b[2] = t.radius;
+      b[3] = t.id;
+      const p = clampPos(b[0], b[1], b[2]);
+      b[0] = Math.round(p.x);
+      b[1] = Math.round(p.y);
+      drawPlayfield();
+      refreshPreviewDebounced();
+    }
+
+    function downloadJson() {
+      const blob = new Blob([JSON.stringify(mapsData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'maps.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      persistOverrideMaps();
+    }
+
+    async function loadMaps() {
+      try {
+        const res = await fetch('./maps.json', { cache: 'no-store' });
+        if (!res.ok) throw new Error('maps.json load failed');
+        mapsData = await res.json();
+      } catch (_) {
+        mapsData = { maps: [] };
+      }
+      ensureMapShape();
+
+      roundSelect.innerHTML = '';
+      const totalRounds = mapsData.maps.length * 3;
+      for (let round = 1; round <= totalRounds; round++) {
+        const ante = Math.floor((round - 1) / 3) + 1;
+        const stage = ((round - 1) % 3) + 1;
+        const opt = document.createElement('option');
+        opt.value = String(round);
+        opt.textContent = `라운드 ${round} (${ante}엔티 ${stage}스테이지)`;
+        roundSelect.appendChild(opt);
+      }
+
+      typeSelect.innerHTML = '';
+      for (const t of BUMPER_TYPES) {
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = `${t.id} (r:${t.radius})`;
+        typeSelect.appendChild(opt);
+      }
+
+      roundSelect.value = '1';
+      selectedIdx = -1;
+      drawPlayfield();
+    }
+
+    canvas.addEventListener('pointerdown', handleDown);
+    canvas.addEventListener('pointermove', handleMove);
+    canvas.addEventListener('pointerup', handleUp);
+    canvas.addEventListener('pointercancel', handleUp);
+    roundSelect.addEventListener('change', () => { selectedIdx = -1; drawPlayfield(); refreshPreview(); });
+    deleteBtn.addEventListener('click', deleteSelected);
+    saveBtn.addEventListener('click', downloadJson);
+    typeSelect.addEventListener('change', () => {
+      applySelectedType();
+    });
+    refreshPreviewBtn.addEventListener('click', refreshPreview);
+
+    loadMaps().then(() => refreshPreview());
+  </script>
+</body>
+</html>
