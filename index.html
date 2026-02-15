@@ -6,7 +6,7 @@
 <title>바다 핀볼 - Ocean Pinball Roguelike</title>
 <!-- PWA -->
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#4682B4">
+<meta name="theme-color" content="#5AA5E1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="바다 핀볼">
@@ -31,14 +31,25 @@
 <meta name="keywords" content="핀볼, 핀볼 게임, 로그라이크, 바다 핀볼, ocean pinball, 웹 게임, PWA 게임">
 <meta name="author" content="Ocean Pinball">
 <style>
+    @font-face {
+        font-family: 'Galmuri9';
+        src:
+            local('Galmuri9'),
+            local('Galmuri 9'),
+            url('https://cdn.jsdelivr.net/npm/galmuri/dist/Galmuri9.woff2') format('woff2'),
+            url('https://cdn.jsdelivr.net/gh/quiple/galmuri@latest/dist/Galmuri9.woff2') format('woff2');
+        font-weight: 400;
+        font-style: normal;
+        font-display: swap;
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-        background-color: #2B4F70;
-        /* Casual Bubble Pattern (Calm Ocean) */
-        background-image: 
+        background-color: #4A90D0;
+        /* Casual Bubble Pattern (Bright Blue) */
+        background-image:
             radial-gradient(rgba(255, 255, 255, 0.1) 2px, transparent 3px),
             radial-gradient(rgba(255, 255, 255, 0.05) 2px, transparent 3px),
-            linear-gradient(180deg, #4A90E2 0%, #2B4F70 100%);
+            linear-gradient(180deg, #5AA5E1 0%, #3A7EC2 100%);
         background-size: 50px 50px, 50px 50px, 100% 100%;
         background-position: 0 0, 25px 25px, 0 0;
         
@@ -72,7 +83,7 @@
         align-items: center;
         gap: 14px;
         color: #ffffff;
-        font: 600 15px "Malgun Gothic", sans-serif;
+        font: 600 15px "Galmuri9", "Malgun Gothic", monospace;
     }
     .spinner {
         width: 52px;
@@ -94,7 +105,7 @@
   <div>LOADING...</div>
 </div>
 <canvas id="game" class="hidden"></canvas>
-<script>window.__USE_BUNDLE__="bundle.83330acd5931.js";</script>
+<script>window.__USE_BUNDLE__="bundle.a4ec32904c5d.js";</script>
 <script>
 window.__MOBILE_CONFIG__ = window.__MOBILE_CONFIG__ || {
   removeAdsProductId: 'remove_ads',
@@ -136,7 +147,7 @@ window.__MOBILE_CONFIG__ = window.__MOBILE_CONFIG__ || {
     msg.style.left = '50%';
     msg.style.transform = 'translate(-50%, -50%)';
     msg.style.color = '#fff';
-    msg.style.font = '16px "Malgun Gothic", sans-serif';
+    msg.style.font = '16px "Galmuri9", "Malgun Gothic", monospace';
     msg.style.textAlign = 'center';
     msg.style.lineHeight = '1.6';
     msg.textContent = '로컬 파일(file://)로는 실행할 수 없습니다.\n정적 서버로 실행해 주세요.';
