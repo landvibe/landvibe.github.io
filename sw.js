@@ -4,10 +4,11 @@ const ASSETS = [
   './index.html',
   './admin.html',
   './maps.json',
+  './assets/fonts/Galmuri9.woff2',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
-  './bundle.a4ec32904c5d.js'
+  './bundle.47f470304e87.js'
 ];
 
 // Install: cache all assets
