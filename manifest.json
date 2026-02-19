@@ -1,6 +1,6 @@
 {
-  "name": "바다 핀볼 - Ocean Pinball Roguelike",
-  "short_name": "바다 핀볼",
+  "name": "RogueTide",
+  "short_name": "RogueTide",
   "description": "로그라이크 핀볼 게임",
   "start_url": "./index.html",
   "scope": "./",
